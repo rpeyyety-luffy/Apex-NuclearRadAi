@@ -220,19 +220,63 @@ with diagnostics_tab:
                             legend=dict(orientation="h", y=-0.35))
     st.plotly_chart(trust_fig, width="stretch")
 
+    st.markdown('<div class="section-label">Individual sensor timelines</div>', unsafe_allow_html=True)
+    st.caption("Raw readings, peer-corrected estimates, and optional simulated truth for each channel.")
+    chart_columns = st.columns(2, gap="large")
+    for i in range(sensor_count):
+        baseline_sensor = np.nanmean(x[:nr.WARMUP, i])
+        adjusted_baseline = np.nanmean(res["y"][:nr.WARMUP, i])
+        corrected_sensor = (
+            res["corrected"][:, i] * baseline_sensor / adjusted_baseline
+            if np.isfinite(baseline_sensor) and np.isfinite(adjusted_baseline) and adjusted_baseline
+            else res["corrected"][:, i]
+        )
+        sensor_fig = go.Figure()
+        sensor_fig.add_trace(go.Scatter(
+            x=tt[upto], y=x[upto, i], name="Raw reading", mode="lines",
+            line=dict(color="#ff746c", width=2),
+        ))
+        sensor_fig.add_trace(go.Scatter(
+            x=tt[upto], y=corrected_sensor[upto], name="AI-corrected", mode="lines",
+            line=dict(color="#8ee2bd", width=2, dash="dash"),
+        ))
+        if show_truth:
+            sensor_fig.add_trace(go.Scatter(
+                x=tt[upto], y=truth[upto, i], name="Simulated true value", mode="lines",
+                line=dict(color="#d5c08e", width=1.5, dash="dot"),
+            ))
+        sensor_flags = np.flatnonzero(res["fault"][upto, i] != "Healthy")
+        sensor_flags = sensor_flags[~np.isnan(x[sensor_flags, i])]
+        if sensor_flags.size:
+            sensor_fig.add_trace(go.Scatter(
+                x=sensor_flags, y=x[sensor_flags, i], name="AI flagged", mode="markers",
+                marker=dict(color="#ff746c", size=7, symbol="x"),
+                text=res["fault"][sensor_flags, i],
+                hovertemplate="Sample %{x}<br>%{text}<br>Reading %{y:.2f}<extra></extra>",
+            ))
+        if np.isfinite(baseline_sensor):
+            sensor_fig.add_hline(
+                y=1.3 * baseline_sensor, line_dash="dash", line_color="#f3b969",
+                annotation_text="130% baseline",
+            )
+        sensor_fig.add_vline(x=nr.WARMUP, line_dash="dot", line_color="#87958f")
+        sensor_fig.add_vline(x=t_now, line_color="#87958f")
+        sensor_fig.update_layout(
+            title=dict(text=f"{nr.NAMES[i]} · {res['fault'][t_now, i]}",
+                       font=dict(size=14, color="#e8eee9")),
+            height=330, margin=dict(l=10, r=10, t=42, b=10),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#c5d0ca"),
+            xaxis=dict(title="Sample", gridcolor="#263632"),
+            yaxis=dict(title="Normalized reading", gridcolor="#263632"),
+            legend=dict(orientation="h", y=-0.28),
+        )
+        with chart_columns[i % 2]:
+            st.plotly_chart(sensor_fig, width="stretch", key=f"individual_sensor_{i}")
+
     st.markdown('<div class="section-label">Threshold alarm vs NuclearRad AI</div>', unsafe_allow_html=True)
     summary = nr.summarise(res, truth, k)
     a, b, c = st.columns(3)
     a.metric("Threshold alarm first fires", "never" if summary["first_alarm"] is None else f"sample {summary['first_alarm']}")
     b.metric("AI first flags this sensor", "no fault" if summary["first_ai"] is None else f"sample {summary['first_ai']}")
     c.metric("Reading error · raw → corrected", f"{summary['err_before']:.1f}% → {summary['err_after']:.1f}%")
-
-with st.expander("Assessment model"):
-    st.markdown("""
-- Sensors are calibrated against peer readings during the first 40 samples.
-- A peer cross-check distinguishes a shared rise from a single sensor drifting away from consensus.
-- Rules detect spikes, drift, stuck readings, excess noise, and dropouts.
-- Trust is a 0-100 behavior-confidence score; it is not a radiation measurement.
-- Shared rises remain visible as possible real leaks and are escalated, even when another sensor is faulty.
-- Flagged readings are replaced with a peer-derived estimate for this demonstration only.
-""")
