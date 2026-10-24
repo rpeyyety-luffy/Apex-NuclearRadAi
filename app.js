@@ -120,6 +120,14 @@ function renderChart(result, labels) {
   return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${result.sensor} readings chart">${grid}<line x1="${pad.l}" x2="${width-pad.r}" y1="${y(threshold)}" y2="${y(threshold)}" stroke="${colors.threshold}" stroke-dasharray="8 6"/><text x="${pad.l + 3}" y="${y(threshold) - 5}" fill="${colors.threshold}" font-size="10">130% of baseline</text>${renderPolyline(result.peer, colors.peer, domain, width, height, pad)}${renderPolyline(result.series, colors.raw, domain, width, height, pad)}${xTicks}</svg>`;
 }
 
+function renderCore(results = expectedSensors.map((sensor) => ({ sensor, issue: 'Awaiting data', latest: NaN }))) {
+  const severity = (issue) => issue === 'Healthy' || issue === 'Awaiting data' ? '' : issue === 'Missing readings' || issue === 'Spike / outlier' || issue === 'Stuck signal' ? 'bad' : 'warn';
+  $('coreSensors').innerHTML = results.map((result, index) => {
+    const reading = Number.isFinite(result.latest) ? result.latest.toFixed(1) : 'awaiting data';
+    return `<div class="rad-node n${index} ${severity(result.issue)}">${result.sensor}<span>${reading} · ${result.issue}</span></div>`;
+  }).join('');
+}
+
 function render(report) {
   clearNotice();
   $('summary').innerHTML = [
@@ -130,6 +138,7 @@ function render(report) {
   $('status').innerHTML = `<div class="eye" style="color:${report.active.length ? 'var(--amber)' : 'var(--mint)'}">${risk} · uploaded data</div><b>${report.active.length ? `${report.active.length} channel${report.active.length > 1 ? 's' : ''} need review` : 'No data-quality anomalies detected'}</b><span class="sub">Recommendations below are based on peer comparison and baseline thresholds. Escalate operational decisions through approved plant procedures.</span>`;
   $('status').style.borderLeftColor = report.active.length ? 'var(--amber)' : 'var(--mint)';
   $('status').classList.add('show');
+  renderCore(report.results);
   $('findingsTitle').hidden = false;
   $('findings').innerHTML = report.results.map((result) => {
     const type = result.issue === 'Healthy' ? 'ok' : result.issue === 'Spike / outlier' || result.issue === 'Missing readings' ? 'bad' : 'warn';
@@ -164,3 +173,4 @@ $('file').addEventListener('change', (event) => {
   reader.readAsArrayBuffer(file);
 });
 $('demo').addEventListener('click', () => loadRows(demoRows(), 'Demo data'));
+renderCore();
