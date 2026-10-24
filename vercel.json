@@ -1,6 +1,6 @@
 {
   "framework": null,
   "installCommand": "",
-  "buildCommand": "mkdir -p public && cp index.html main.py nuclearrad.py sensor_charts.py public/",
+  "buildCommand": "mkdir -p public && cp index.html public/",
   "outputDirectory": "public"
 }
