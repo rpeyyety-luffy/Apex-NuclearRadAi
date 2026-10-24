@@ -79,7 +79,7 @@ footer{margin-top:34px;color:var(--muted);font-size:12px}
       <div class="eye">Ideal reference</div>
       <div id="refName" style="margin:6px 0 2px;font-weight:600"></div>
       <div class="refs" id="refChips"></div>
-      <div class="small">Sensors are matched by number (RAD 1, RAD-01, Sensor 1…). A sensor whose normal level is far from the ideal is compared with its own first readings instead. Drift, signal dropouts, excess noise and real leaks (all sensors falling together) are recognised by machine-learning models trained on labelled recordings.</div>
+      <div class="small">Sensors are matched by number (RAD 1, RAD-01, Sensor 1…). A sensor whose normal level is far from the ideal is compared with its own first readings instead. Drift, signal dropouts, excess noise, frozen (stuck) readings, repeated spikes and real leaks (all sensors falling together) are recognised by machine-learning models trained on labelled recordings.</div>
       <div class="btns">
         <button class="primary" id="demo">Try a demo</button>
         <button id="example">Download example file</button>
@@ -103,7 +103,7 @@ footer{margin-top:34px;color:var(--muted);font-size:12px}
     <div class="btns"><button id="csv">Download results (CSV)</button></div>
 
     <h2>Sensor readings</h2>
-    <div class="sub">Grey line: raw readings · green line: trend · shaded band: ideal range · dotted lines: ML drift (amber), dropout (violet) and noise (cyan) probability · yellow background: all sensors moving together (radiation rise or real leak) · markers: abnormal readings.</div>
+    <div class="sub">Grey line: raw readings · green line: trend · shaded band: ideal range · dotted lines: ML drift (amber), dropout (violet), noise (cyan), stuck (white) and spike (pink) probability · yellow background: all sensors moving together (radiation rise or real leak) · markers: abnormal readings.</div>
     <div id="sensors"></div>
   </section>
 
@@ -281,7 +281,7 @@ function render() {
   const shapes = eventShapes(xs);
   $("sensors").innerHTML = r.sensors.map((s, i) => `<div class="box sensor">
       <div class="sensor-head"><h3>${esc(s.name)} <span class="tag" style="background:${STATUS[s.status]}22;color:${STATUS[s.status]}">${s.status}</span></h3>
-      <span class="small">${s.anomalies} abnormal readings · trend ${s.devPct >= 0 ? "+" : ""}${s.devPct.toFixed(1)}% vs peers${s.driftProb ? ` · ML drift ${Math.round(100 * s.driftProb[s.driftProb.length - 1])}%` : ""}${s.dropoutProb ? ` · ML dropout ${Math.round(100 * s.dropoutProb[s.dropoutProb.length - 1])}%` : ""}${s.noiseProb ? ` · ML noise ${Math.round(100 * s.noiseProb[s.noiseProb.length - 1])}%` : ""}</span></div>
+      <span class="small">${s.anomalies} abnormal readings · trend ${s.devPct >= 0 ? "+" : ""}${s.devPct.toFixed(1)}% vs peers${s.driftProb ? ` · ML drift ${Math.round(100 * s.driftProb[s.driftProb.length - 1])}%` : ""}${s.dropoutProb ? ` · ML dropout ${Math.round(100 * s.dropoutProb[s.dropoutProb.length - 1])}%` : ""}${s.noiseProb ? ` · ML noise ${Math.round(100 * s.noiseProb[s.noiseProb.length - 1])}%` : ""}${s.stuckProb ? ` · ML stuck ${Math.round(100 * s.stuckProb[s.stuckProb.length - 1])}%` : ""}${s.spikeProb ? ` · ML spike ${Math.round(100 * s.spikeProb[s.spikeProb.length - 1])}%` : ""}</span></div>
       <div class="small">${esc(s.note)}</div>
       <div id="chart${i}" class="chart"></div>
       <div class="advice"><div><div class="eye">Finding</div>${esc(s.summary)}</div>
@@ -308,13 +308,13 @@ function render() {
         hovertemplate: `%{x}<br>${t}<extra></extra>`,
       });
     }
-    const probLines = [[s.driftProb, "ML drift probability", "#f3b969"], [s.dropoutProb, "ML dropout probability", "#b79cff"], [s.noiseProb, "ML noise probability", "#6fd3e8"]];
+    const probLines = [[s.driftProb, "ML drift probability", "#f3b969"], [s.dropoutProb, "ML dropout probability", "#b79cff"], [s.noiseProb, "ML noise probability", "#6fd3e8"], [s.stuckProb, "ML stuck probability", "#e6e9ef"], [s.spikeProb, "ML spike probability", "#f28bb8"]];
     for (const [probs, name, color] of probLines) {
       if (!probs) continue;
       traces.push({ x: xs, y: probs.map((p) => Math.round(1000 * p) / 10), yaxis: "y2", mode: "lines", name,
         line: { color, width: 1.5, dash: "dot" }, hovertemplate: `%{x}<br>%{y}%<extra>${name}</extra>` });
     }
-    const hasProb = !!(s.driftProb || s.dropoutProb || s.noiseProb);
+    const hasProb = !!(s.driftProb || s.dropoutProb || s.noiseProb || s.stuckProb || s.spikeProb);
     Plotly.newPlot(`chart${i}`, traces, plotLayout({
       shapes,
       margin: { l: 56, r: hasProb ? 52 : 14, t: 14, b: 40 },

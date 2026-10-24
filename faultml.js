@@ -9,6 +9,10 @@
              whether the sensor is dropping out intermittently, also between the gaps.
    noise   - how rough a sensor's readings are from one reading to the next, compared with its own
              normal roughness and with its peers'; slow drift and plant-wide changes do not count.
+   spike   - how far each reading jumps from the sensor's recent level while its peers stay put, and
+             how often that has happened lately; it rates whether the sensor keeps producing spikes.
+   stuck   - how long a sensor has repeated exactly the same value and how flat its recent readings are,
+             while its peers keep moving.
    leak    - one rating for the whole plant: whether the sensors are falling together, as they do
              in a real coolant leak (a fault of one sensor moves only that sensor).
 
@@ -17,7 +21,7 @@
   "use strict";
 
   // BEGIN MODELS (written by ml/train_models.js - do not edit by hand)
-  const MODELS = {"drift":{"features":["|z15|","|z60|","away60","beyond2","persist","scatter"],"mean":[0.88156,1.00714,0.122,0.16362,0.23018,0.82464],"std":[0.91897,1.01486,0.66351,0.25397,0.22689,0.3955],"weights":[0.39868,0.20106,0.52985,1.51389,0.5102,-1.8063],"bias":-4.38607,"threshold":0.6765},"dropout":{"features":["missing now","missing 30","missing 120","gaps 300","longest gap 300","since gap"],"mean":[0.00755,0.00753,0.0069,0.09833,0.15426,5.49201],"std":[0.08658,0.06301,0.04192,0.28516,0.56351,0.7763],"weights":[0.49362,0.688,1.16203,-0.15364,1.72827,0.215],"bias":-4.08345,"threshold":0.5},"noise":{"features":["rough8","rough30","rough60","jumps30","rough30 vs peers"],"mean":[0.0787,0.18084,0.18894,0.05397,0.14494],"std":[0.72202,0.60585,0.56932,0.17847,0.64409],"weights":[0.84544,0.24408,0.09975,1.45456,0.19066],"bias":-4.31057,"threshold":0.8572},"leak":{"features":["fall15","fall60","slope60","sensors falling"],"mean":[0.53462,0.49113,0.38473,0.16554],"std":[1.75318,1.68737,1.35155,0.3415],"weights":[1.25324,0.17899,1.07895,2.06416],"bias":-2.98601,"threshold":0.6715}};
+  const MODELS = {"drift":{"features":["|z15|","|z60|","away60","beyond2","persist","scatter"],"mean":[0.82743,0.94961,0.08403,0.14739,0.22869,0.79561],"std":[0.80544,0.8985,0.64356,0.23356,0.2256,0.36265],"weights":[1.08704,-0.25565,1.90705,1.16682,0.62206,-1.9589],"bias":-9.37028,"threshold":0.9515},"dropout":{"features":["missing now","missing 30","missing 120","gaps 300","longest gap 300","since gap"],"mean":[0.0057,0.00568,0.00518,0.07989,0.12219,5.5322],"std":[0.07527,0.0545,0.03631,0.25521,0.4944,0.69833],"weights":[0.43562,0.1281,0.56674,0.20337,2.12168,-0.08882],"bias":-7.66123,"threshold":0.5},"noise":{"features":["rough8","rough30","rough60","jumps30","rough30 vs peers"],"mean":[-0.01155,0.08957,0.10143,0.0498,0.04926],"std":[0.82955,0.7409,0.70999,0.16538,0.73765],"weights":[1.78908,-0.40559,-0.19119,1.10703,2.27607],"bias":-7.81374,"threshold":0.882},"stuck":{"features":["same run","flat30","rough15","peers rough15"],"mean":[0.13071,0.02862,0.09925,0.08372],"std":[0.80263,0.15447,0.77856,0.28013],"weights":[3.03476,1.06374,-0.37868,-0.15214],"bias":-4.99379,"threshold":0.5},"spike":{"features":["jump now","peers jump now","spikes 60","spikes 300","since spike","rough30"],"mean":[0.64646,0.6135,0.1236,0.19284,5.41102,0.09948],"std":[0.53839,0.33662,0.51584,0.73478,1.09778,0.74089],"weights":[-1.26151,-0.44201,-2.87321,2.04626,-3.39144,-0.80159],"bias":-3.32246,"threshold":0.999},"leak":{"features":["fall15","fall60","slope60","sensors falling"],"mean":[0.53973,0.50686,0.33508,0.13088],"std":[1.72469,1.663,1.33888,0.31403],"weights":[2.69737,-0.90406,1.53284,1.73799],"bias":-4.45347,"threshold":0.7597}};
   // END MODELS
 
   const FEATURES = {
@@ -25,6 +29,8 @@
     dropout: ["missing now", "missing 30", "missing 120", "gaps 300", "longest gap 300", "since gap"],
     noise: ["rough8", "rough30", "rough60", "jumps30", "rough30 vs peers"],
     leak: ["fall15", "fall60", "slope60", "sensors falling"],
+    stuck: ["same run", "flat30", "rough15", "peers rough15"],
+    spike: ["jump now", "peers jump now", "spikes 60", "spikes 300", "since spike", "rough30"],
   };
 
   function median(a) {
@@ -151,7 +157,60 @@
     })];
   }
 
+  // jump = a reading's distance from the median of the sensor's previous 10 readings, in units of its
+  // normal scatter; a spike is a jump of over SPIKE_JUMP while the peers' typical jump stays small, so a
+  // plant-wide step does not count. rough30 (robust, so a few spikes barely move it) tells spikes from noise.
+  const SPIKE_JUMP = 8;
+  function spikeFeatures(columns, baseN) {
+    const jumps = columns.map((col) => {
+      const level = median(col.slice(0, baseN).filter((v) => v > 0));
+      const r = col.map((v, t) => (t >= 3 && present(v) ? (v - median(col.slice(Math.max(0, t - 10), t).filter(present))) / level : NaN));
+      const scale = Math.max(robustSd(r.slice(0, baseN)), 1e-9);
+      return r.map((v) => v / scale);
+    });
+    return jumps.map((z, i) => {
+      const peers = z.map((_, t) => median(jumps.filter((_, j) => j !== i).map((o) => Math.abs(o[t]))));
+      const spike = z.map((v, t) => Math.abs(v) > SPIKE_JUMP && !(peers[t] > 3));
+      let last = -Infinity;
+      return z.map((v, t) => {
+        if (spike[t]) last = t;
+        if (t < 8) return null;
+        let s60 = 0, s300 = 0;   // spikes counted once, also when they last two readings
+        for (let k = Math.max(1, t - 299); k <= t; k++) if (spike[k] && !spike[k - 1]) { s300++; if (k > t - 60) s60++; }
+        return [Number.isFinite(v) ? Math.abs(v) : 0, Number.isFinite(peers[t]) ? peers[t] : 0, s60, s300,
+          Math.min(300, t - last), tail(z, t, 30).length >= 5 ? robustSd(tail(z, t, 30)) : 1];   // 1 = normal roughness inside a long gap
+      });
+    });
+  }
+
+  // a frozen sensor repeats one value exactly; rough15 is its step scatter over the last 15 readings in units
+  // of its normal step scatter (0 when frozen), and the peers' rough15 shows whether the plant itself is still
+  function stuckFeatures(columns, baseN) {
+    const steps = columns.map((col) => {
+      const st = col.map((v, t) => (t > 0 && present(v) && present(col[t - 1]) ? v - col[t - 1] : NaN));
+      const scale = Math.max(robustSd(st.slice(1, baseN)), 1e-12);
+      return st.map((v) => v / scale);
+    });
+    const rough = steps.map((st) => st.map((_, t) => {
+      const w = tail(st, t, 15);
+      return w.length >= 5 ? Math.sqrt(w.reduce((a, v) => a + v * v, 0) / w.length) : NaN;
+    }));
+    return columns.map((col, i) => {
+      let run = 0;
+      return col.map((v, t) => {
+        run = t > 0 && present(v) && v === col[t - 1] ? run + 1 : 0;
+        if (t < 8 || !present(v)) return null;
+        const w30 = tail(steps[i], t, 30);
+        const peers = median(rough.filter((_, j) => j !== i).map((r) => r[t]));
+        return [run, w30.length ? w30.filter((x) => x === 0).length / w30.length : 0, Number.isFinite(rough[i][t]) ? rough[i][t] : 1,
+          Number.isFinite(peers) ? peers : 1];
+      });
+    });
+  }
+
   function features(kind, columns, baseN) {
+    if (kind === "stuck") return stuckFeatures(columns, baseN);
+    if (kind === "spike") return spikeFeatures(columns, baseN);
     if (kind === "drift") return driftFeatures(columns, baseN);
     if (kind === "noise") return noiseFeatures(columns, baseN);
     if (kind === "leak") return leakFeatures(columns, baseN);
@@ -164,6 +223,8 @@
     if (kind === "noise") return [Math.log(f[0] + 0.05), Math.log(f[1] + 0.05), Math.log(f[2] + 0.05), f[3], Math.log(f[4] + 0.05)];
     const signedLog = (v) => Math.sign(v) * Math.log1p(Math.abs(v));
     if (kind === "leak") return [signedLog(f[0]), signedLog(f[1]), signedLog(f[2]), f[3]];
+    if (kind === "stuck") return [Math.log1p(f[0]), f[1], Math.log(f[2] + 0.05), Math.log(f[3] + 0.05)];
+    if (kind === "spike") return [Math.log1p(f[0]), Math.log1p(f[1]), Math.log1p(f[2]), Math.log1p(f[3]), Math.log1p(f[4]), Math.log(f[5] + 0.05)];
     return [f[0], f[1], f[2], Math.log1p(f[3]), Math.log1p(f[4]), Math.log1p(f[5])];
   }
 

@@ -4,8 +4,12 @@
      drift*.csv    one sensor slowly drifts away from the others
      dropout*.csv  one sensor loses its signal in several intervals (blank cells)
      noise*.csv    one sensor's reading-to-reading noise becomes ~12x larger
+     stuck*.csv    one sensor freezes at a constant value while the others keep varying
+     spike*.csv    one sensor shows short (1-2 reading), large spikes at irregular times
      realleak*_<fault>.csv  a real coolant leak: pressure falls on all sensors, and one sensor
                    also has its own fault (dropout, noise, drift or spike, named in the file name)
+     realleak_maxdanger.csv  a large-break leak: pressure collapses from 15.5 to about 0.8 MPa on all
+                   sensors together, with no sensor fault
      normal_*.csv  healthy recording, used only as normal (negative) examples
    Labelled files have Anomaly_Active = 1 while the fault or leak is active, Real_Leak = 1 while
    the pressure loss is real and Faulty_Sensor = the index of the bad sensor.
@@ -21,10 +25,10 @@ const FaultML = require("../faultml.js");
 const Detector = require("../detector.js");
 
 const DATA = path.join(__dirname, "data");
-const KINDS = ["drift", "dropout", "noise", "leak"];
-const GRACE = { drift: 40, dropout: 0, noise: 10, leak: 10 };   // first readings after onset that are too small to see yet
+const KINDS = ["drift", "dropout", "noise", "stuck", "spike", "leak"];
+const GRACE = { drift: 40, dropout: 0, noise: 10, stuck: 2, spike: 0, leak: 10 };   // first readings after onset that are too small to see yet
 const MAX_FALSE_RATE = 0.001;
-const EPOCHS = 400, RATE = 0.5, L2 = 1e-3;
+const NEWTON_STEPS = 30, L2 = 1e-3;
 
 function loadCsv(file) {
   const [head, ...lines] = fs.readFileSync(file, "utf8").trim().split(/\r?\n/);
@@ -36,7 +40,7 @@ function loadCsv(file) {
   const name = path.basename(file);
   return {
     name,
-    kind: ["drift", "dropout", "noise", "spike"].find((k) => name.startsWith(k) || name.includes(`_${k}`)) || "normal",
+    kind: ["drift", "dropout", "noise", "stuck", "spike"].find((k) => name.startsWith(k) || name.includes(`_${k}`)) || "normal",
     names: sensorIdx.map((i) => cols[i]),
     columns: sensorIdx.map((i) => rows.map((r) => (r[i] === "" || r[i] === undefined ? NaN : +r[i]))),
     active: cols.includes("Anomaly_Active") ? get("Anomaly_Active") : new Array(n).fill(0),
@@ -53,6 +57,11 @@ function onsetOf(kind, ds) {
   if (ds.kind !== kind) return -1;
   // dropout: the first gap (in the leak files the labelled start is the leak, before the first gap)
   if (kind === "dropout") return ds.columns[ds.faulty - 1].findIndex((v) => !Number.isFinite(v));
+  // spike: the first reading far (over 2.5%) from the other sensors (in the leak files, too, the label marks the leak)
+  if (kind === "spike") return ds.columns[ds.faulty - 1].findIndex((v, t) => {
+    const peers = median(ds.columns.filter((_, j) => j !== ds.faulty - 1).map((c) => c[t]));
+    return Math.abs(v / peers - 1) > 0.025;
+  });
   return ds.active.indexOf(1);
 }
 
@@ -61,12 +70,18 @@ function label(kind, ds, i, t) {
   if (kind === "leak") return ds.leak[t] ? (t < onsetOf(kind, ds) + GRACE.leak ? null : true) : false;
   if (ds.kind !== kind || ds.faulty !== i + 1) return false;
   const onset = onsetOf(kind, ds);
-  if (kind === "drift" || kind === "noise") {
+  if (kind === "drift" || kind === "noise" || kind === "stuck") {
     if (!ds.active[t]) return false;
     return t < onset + GRACE[kind] ? null : true;
   }
-  // dropout: from the first gap on, the sensor is unreliable, also between the gaps
+  // dropout and spike: from the first gap or spike on, the sensor is unreliable, also in between
   return t >= onset;
+}
+
+function median(a) {
+  const s = a.filter(Number.isFinite).sort((x, y) => x - y);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
 const featureCache = new Map();
@@ -76,13 +91,18 @@ function cachedFeatures(kind, ds) {
   return featureCache.get(key);
 }
 
+const exampleCache = new Map();
 function examples(kind, ds) {
+  const key = `${kind}|${ds.name}`;
+  if (exampleCache.has(key)) return exampleCache.get(key);
   const out = [];
   cachedFeatures(kind, ds).forEach((fs_, i) => fs_.forEach((f, t) => {
     if (!f || t < ds.baseN) return;
     const y = label(kind, ds, i, t);
-    if (y !== null) out.push({ x: FaultML.transform(kind, f), y: y ? 1 : 0 });
+    const x = FaultML.transform(kind, f);
+    if (y !== null && x.every(Number.isFinite)) out.push({ x, y: y ? 1 : 0 });
   }));
+  exampleCache.set(key, out);
   return out;
 }
 
@@ -92,28 +112,89 @@ function prob(model, x) {
   return 1 / (1 + Math.exp(-s));
 }
 
+// solve H x = g (small dense system, Gaussian elimination with partial pivoting)
+function solve(H, g) {
+  const n = g.length, A = H.map((row, i) => [...row, g[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]];
+    for (let r = c + 1; r < n; r++) {
+      const f = A[r][c] / A[c][c];
+      for (let q = c; q <= n; q++) A[r][q] -= f * A[c][q];
+    }
+  }
+  const x = new Array(n).fill(0);
+  for (let r = n - 1; r >= 0; r--) {
+    let v = A[r][n];
+    for (let q = r + 1; q < n; q++) v -= A[r][q] * x[q];
+    x[r] = v / A[r][r];
+  }
+  return x;
+}
+
 function train(kind, sets) {
   const data = sets.flatMap((ds) => examples(kind, ds));
   const k = data[0].x.length;
   const mean = Array.from({ length: k }, (_, j) => data.reduce((s, d) => s + d.x[j], 0) / data.length);
   const std = Array.from({ length: k }, (_, j) => Math.sqrt(data.reduce((s, d) => s + (d.x[j] - mean[j]) ** 2, 0) / data.length) || 1);
-  const X = data.map((d) => d.x.map((v, j) => (v - mean[j]) / std[j]));
-  const pos = data.filter((d) => d.y).length, neg = data.length - pos;
-  const cw = (y) => (y ? data.length / (2 * pos) : data.length / (2 * neg));   // balance the classes
-  let w = new Array(k).fill(0), b = 0;
-  for (let e = 0; e < EPOCHS; e++) {
-    const gw = new Array(k).fill(0);
-    let gb = 0;
-    X.forEach((x, n) => {
-      const z = b + x.reduce((s, v, j) => s + v * w[j], 0);
-      const err = (1 / (1 + Math.exp(-z)) - data[n].y) * cw(data[n].y);
-      x.forEach((v, j) => (gw[j] += err * v));
-      gb += err;
-    });
-    w = w.map((wj, j) => wj - RATE * (gw[j] / data.length + L2 * wj));
-    b -= RATE * gb / data.length;
+  const N = data.length, X = new Float64Array(N * k), Y = new Float64Array(N), C = new Float64Array(N);
+  const pos = data.filter((d) => d.y).length, neg = N - pos;
+  data.forEach((d, n) => {
+    d.x.forEach((v, j) => (X[n * k + j] = (v - mean[j]) / std[j]));
+    Y[n] = d.y;
+    C[n] = d.y ? N / (2 * pos) : N / (2 * neg);   // balance the classes
+  });
+  // class-weighted logistic regression with a small L2 penalty, fitted by Newton's method
+  // (a handful of passes over the data, against hundreds for plain gradient descent)
+  const K = k + 1;   // weights + bias
+  let beta = new Float64Array(K);
+  const loss = (bt) => {
+    let L = 0;
+    for (let n = 0; n < N; n++) {
+      let z = bt[k];
+      for (let j = 0; j < k; j++) z += X[n * k + j] * bt[j];
+      L += C[n] * (Math.log1p(Math.exp(-Math.abs(z))) + Math.max(z, 0) - Y[n] * z);
+    }
+    let r = 0;
+    for (let j = 0; j < k; j++) r += bt[j] * bt[j];
+    return L / N + 0.5 * L2 * r;
+  };
+  let current = loss(beta);
+  for (let it = 0; it < NEWTON_STEPS; it++) {
+    const g = new Float64Array(K), H = Array.from({ length: K }, () => new Float64Array(K));
+    const xr = new Float64Array(K);
+    xr[k] = 1;
+    for (let n = 0; n < N; n++) {
+      let z = beta[k];
+      for (let j = 0; j < k; j++) z += (xr[j] = X[n * k + j]) * beta[j];
+      const p = 1 / (1 + Math.exp(-z)), e = C[n] * (p - Y[n]), h = C[n] * p * (1 - p);
+      for (let a = 0; a < K; a++) {
+        g[a] += e * xr[a];
+        for (let c = 0; c <= a; c++) H[a][c] += h * xr[a] * xr[c];
+      }
+    }
+    for (let a = 0; a < K; a++) {
+      g[a] /= N;
+      for (let c = 0; c <= a; c++) H[c][a] = H[a][c] /= N;
+      if (a < k) { g[a] += L2 * beta[a]; H[a][a] += L2; } else H[a][a] += 1e-6;
+    }
+    const step = solve(H, g);
+    // halve the step until the loss goes down
+    let t = 1, next, nextLoss;
+    do {
+      next = beta.map((v, a) => v - t * step[a]);
+      nextLoss = loss(next);
+      t /= 2;
+    } while (!(nextLoss <= current) && t > 1e-4);   // also rejects a non-finite step (separable data)
+    if (!(nextLoss <= current)) break;
+    const done = current - nextLoss < 1e-9;
+    beta = next;
+    current = nextLoss;
+    if (done) break;
   }
-  const model = { features: FaultML.FEATURES[kind], mean, std, weights: w, bias: b };
+  const w = beta.slice(0, k), b = beta[k];
+  const model = { features: FaultML.FEATURES[kind], mean, std, weights: Array.from(w), bias: b };
   // decision threshold: lowest probability that keeps healthy readings flagged under MAX_FALSE_RATE
   const healthy = data.filter((d) => !d.y).map((d) => prob(model, d.x)).sort((a, c) => c - a);
   model.threshold = Math.max(0.5, healthy[Math.floor(healthy.length * MAX_FALSE_RATE)] + 1e-6);
@@ -145,10 +226,13 @@ function mlFlags(kind, ds, model) {
 
 // the rule-based detector without the models, for comparison
 function ruleFlags(kind, ds) {
-  const res = Detector.analyse(ds.names, ds.columns, { ml: false });
+  if (!ds.rules) ds.rules = Detector.analyse(ds.names, ds.columns, { ml: false });   // the same for every kind
+  const res = ds.rules;
   // the rules only know plant-wide rises (radiation); for a leak, count any plant-wide event
   if (kind === "leak") { const ev = new Set(res.events); return [res.sensors[0].type.map((_, t) => ev.has(t))]; }
-  const want = { drift: ["Drift high", "Drift low"], dropout: ["No signal"], noise: ["Noisy"] }[kind];
+  // spike: the rules put a sensor on watch after two spikes; count spikes in the last 300 readings
+  if (kind === "spike") return res.sensors.map((s) => s.type.map((_, t) => s.type.slice(Math.max(0, t - 299), t + 1).filter((v) => v === "Spike").length >= 2));
+  const want = { drift: ["Drift high", "Drift low"], dropout: ["No signal"], noise: ["Noisy"], stuck: ["Stuck"] }[kind];
   return res.sensors.map((s) => s.type.map((t) => want.includes(t)));
 }
 
@@ -181,9 +265,21 @@ function withMildNoise(ds) {
   return { ...ds, name: `${ds.name} (mild noise)`, columns };
 }
 
+// One spike alone is more likely a one-off glitch (a relay switching nearby) than a failing sensor;
+// the rules, too, wait for a second spike. Copies of the files without spike faults, with a single
+// spike on a healthy sensor, labelled normal, teach the model that difference. Training only.
+function withSingleSpike(ds) {
+  const i = ds.faulty > 0 ? ds.faulty % ds.columns.length : 1;
+  const t = ds.baseN + Math.floor((ds.n - ds.baseN) * ((ds.name.length * 37) % 100) / 100);
+  const columns = ds.columns.slice();
+  columns[i] = columns[i].map((v, k) => (k === t && Number.isFinite(v) ? v * (ds.name.length % 2 ? 1.065 : 0.935) : v));
+  return { ...ds, name: `${ds.name} (single spike)`, columns };
+}
+
 const files = fs.readdirSync(DATA).filter((f) => f.endsWith(".csv")).sort();
 const sets = files.map((f) => loadCsv(path.join(DATA, f)));
-const augmented = [...sets.filter((ds) => ds.kind !== "dropout").map(withIsolatedBlanks), ...sets.map(withMildNoise)];
+const augmented = [...sets.filter((ds) => ds.kind !== "dropout").map(withIsolatedBlanks), ...sets.map(withMildNoise),
+  ...sets.filter((ds) => ds.kind !== "spike").map(withSingleSpike)];
 const finals = {};
 let report = `# Fault model evaluation\n\nEach file was scored by a model trained on the other files (leave-one-file-out).\n` +
   `- **Detected after**: seconds from the labelled fault start until the faulty sensor stays flagged for 10 readings in a row.\n` +

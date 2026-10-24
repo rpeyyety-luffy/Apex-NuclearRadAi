@@ -29,7 +29,7 @@ reported as a possible real radiation rise rather than a sensor fault. Open
 
 ### Machine-learned fault models
 
-`faultml.js` holds two logistic-regression models, trained on labelled recordings in `ml/data`:
+`faultml.js` holds six logistic-regression models, trained on labelled recordings in `ml/data`:
 
 - **Drift**: measures how far each sensor's gap to its peers has moved from its normal gap (the
   healthy start of the file) and turns six features (size, speed and persistence of that move)
@@ -37,9 +37,18 @@ reported as a possible real radiation rise rather than a sensor fault. Open
 - **Dropout**: looks at how often, how recently and for how long a sensor has lost its signal, and
   rates whether it is dropping out intermittently, also in the stretches between gaps. A single
   missed sample is treated as a logger hiccup, not a failing sensor.
+- **Noise**: measures how rough a sensor's readings are from one reading to the next, compared
+  with its own normal roughness and with its peers'; it must flag 5 readings in a row.
+- **Stuck**: measures how long a sensor has repeated exactly the same value and how flat its recent
+  readings are while its peers keep moving.
+- **Spike**: measures how far each reading jumps from the sensor's recent level while its peers stay
+  put, and how often that has happened lately, and rates whether the sensor keeps producing spikes.
+  A single spike is treated as a one-off glitch.
+- **Leak**: one rating for the whole plant: whether all sensors are falling together, as in a real
+  coolant leak. It is reported as a plant event, separately from any sensor's own fault.
 
-The file name tells the trainer the fault type (`drift*.csv`, `dropout*.csv`; `normal_*.csv` is
-healthy). Labelled files need `Anomaly_Active` and `Faulty_Sensor` columns, as in the supplied
+The file name tells the trainer the fault type (`drift*.csv`, `dropout*.csv`, `noise*.csv`, `stuck*.csv`, `spike*.csv`;
+`realleak*_<fault>.csv` is a real leak plus that sensor fault; `normal_*.csv` is healthy). Labelled files need `Anomaly_Active` and `Faulty_Sensor` columns (and `Real_Leak` for leaks), as in the supplied
 sets. Retrain after adding recordings:
 
 ```bash

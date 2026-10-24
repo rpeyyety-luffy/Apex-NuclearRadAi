@@ -203,12 +203,16 @@
     // backstop for small shifts on very noisy sensors, which the training data did not cover
     // dropout: the dropout model rates how likely each sensor is to keep losing its signal
     // noise: the noise model and the scatter rule each flag a noisy sensor (either one is enough)
+    // stuck: the stuck model and the identical-readings rule each flag a frozen sensor (either one is enough)
+    // spike: the spike model rates how likely each sensor is to keep producing spikes
     // leak: the leak model rates the whole plant; sensors falling together is a real pressure loss
     const FML = typeof FaultML !== "undefined" ? FaultML : typeof require === "function" ? require("./faultml.js") : null;
     const models = opts.ml !== false && FML ? FML.MODELS : {};
     const ml = peerMode && models.drift ? FML.predict("drift", columns, baseN) : null;
     const dropML = models.dropout ? FML.predict("dropout", columns, baseN) : null;
     const noiseML = peerMode && models.noise ? FML.predict("noise", columns, baseN) : null;
+    const stuckML = peerMode && models.stuck ? FML.predict("stuck", columns, baseN) : null;
+    const spikeML = peerMode && models.spike ? FML.predict("spike", columns, baseN) : null;
     const leakProb = peerMode && models.leak ? FML.predict("leak", columns, baseN)[0].map((r) => r.p) : null;
     // like noise, a leak lasts: it counts once the model has flagged NOISE_RUN readings in a row
     const leakReadings = leakProb ? leakProb.map((_, t) => t).filter((t) => t >= NOISE_RUN - 1
@@ -217,10 +221,13 @@
       s.driftProb = ml ? ml[i].map((r) => r.p) : null;
       s.dropoutProb = dropML ? dropML[i].map((r) => r.p) : null;
       s.noiseProb = noiseML ? noiseML[i].map((r) => r.p) : null;
+      s.stuckProb = stuckML ? stuckML[i].map((r) => r.p) : null;
+      s.spikeProb = spikeML ? spikeML[i].map((r) => r.p) : null;
       // excess noise lasts, so the model must flag NOISE_RUN readings in a row before it counts
       s.noiseML = s.noiseProb ? s.noiseProb.map((_, t) => t >= NOISE_RUN - 1
         && s.noiseProb.slice(t - NOISE_RUN + 1, t + 1).every((p) => p >= models.noise.threshold)) : null;
     });
+    const stuckNow = (s, t) => s.stuck[t] || !!(s.stuckProb && s.stuckProb[t] >= models.stuck.threshold);
     const drift = (s, i, t) => {
       if (ml && ml[i][t].p >= models.drift.threshold) return ml[i][t].direction > 0 ? "Drift high" : "Drift low";
       return s.rel[t] > s.thr ? "Drift high" : s.rel[t] < -s.thr ? "Drift low" : null;
@@ -228,7 +235,7 @@
     for (const s of sensors) s.rel = new Array(n);
     for (let t = 0; t < n; t++) {
       // two passes: sensors that look faulty at this moment are left out of everyone else's peer group
-      const suspect = new Set(sensors.filter((s) => !Number.isFinite(s.x[t]) || s.stuck[t] || noisy(s, t)
+      const suspect = new Set(sensors.filter((s) => !Number.isFinite(s.x[t]) || stuckNow(s, t) || noisy(s, t)
         || Math.abs(relTo(s, t, sensors)) > s.thr));
       const trusted = sensors.filter((s) => !suspect.has(s));
       for (const s of sensors) s.rel[t] = relTo(s, t, trusted.length - (suspect.has(s) ? 0 : 1) >= 2 ? trusted : sensors);
@@ -240,7 +247,7 @@
       sensors.forEach((s, i) => {
         let type;
         if (!Number.isFinite(s.x[t])) type = "No signal";
-        else if (s.stuck[t]) type = "Stuck";
+        else if (stuckNow(s, t)) type = "Stuck";
         else if (noisy(s, t) || (s.noiseML && s.noiseML[t])) type = "Noisy";
         else if (Math.abs(s.x[t] - s.level[t]) > SPIKE_SIGMA * s.sd * counting(s, t)) type = "Spike";
         else if (drift(s, i, t)) type = drift(s, i, t);
@@ -302,6 +309,15 @@
           s.summary = `Lost its signal ${gaps} time${gaps === 1 ? "" : "s"}.`;
         }
         s.summary += ` The dropout model rates further signal loss ${Math.round(100 * dropNow)}% likely.`;
+      }
+      const spikeNow = s.spikeProb ? s.spikeProb[n - 1] : 0;
+      if (s.spikeProb && spikeNow >= models.spike.threshold && s.counts["Spike"]) {
+        if (s.status === "Healthy" || s.status === "At risk") {
+          s.status = "Watch";
+          s.fault = "Spike";
+          s.summary = `Showed ${s.counts["Spike"]} spike reading${s.counts["Spike"] === 1 ? "" : "s"}.`;
+        }
+        s.summary += ` The spike model rates further spikes ${Math.round(100 * spikeNow)}% likely.`;
       }
       s.advice = s.fault ? ADVICE[s.fault] : [];
     }
