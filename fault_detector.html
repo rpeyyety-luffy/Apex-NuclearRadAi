@@ -1,31 +1,360 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
-    <title>NuclearRad | Fault Detector</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.css" />
-    <style>
-      html, body { margin: 0; background: #ffffff; }
-    </style>
-  </head>
-  <body>
-    <div id="root"></div>
-    <!-- Runs the Streamlit app fully in the browser (Pyodide), so it can be served as a static site on Vercel. -->
-    <script type="module">
-      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.js";
-      mount(
-        {
-          requirements: ["numpy", "pandas", "plotly", "openpyxl"],
-          entrypoint: "fault_detector.py",
-          files: {
-            "fault_detector.py": { url: "./fault_detector.py" },
-            "charts.py": { url: "./charts.py" },
-            "nuclearrad.py": { url: "./nuclearrad.py" },
-          },
-        },
-        document.getElementById("root"),
-      );
-    </script>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NuclearRad | Fault Detector</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script src="detector.js"></script>
+<style>
+:root{--bg:#0b1211;--panel:#101a18;--line:#294039;--ink:#e8eee9;--muted:#9aa9a4;--mint:#8ee2bd;--amber:#f3b969;--red:#ff746c;--blue:#7cb3ff}
+*{box-sizing:border-box}
+html{background:#0b1211}
+body{margin:0;background:radial-gradient(ellipse at 62% 0,#1c302b,#111b19 42%,#0b1211);color:var(--ink);font:14px/1.5 system-ui,sans-serif;min-height:100vh}
+a{color:var(--mint)}
+main{max-width:1300px;margin:auto;padding:30px 34px 60px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.eye{color:var(--mint);font:600 11px ui-monospace,monospace;letter-spacing:1.2px;text-transform:uppercase}
+h1{font-size:39px;margin:6px 0 4px;line-height:1.1}
+h2{font-size:21px;margin:30px 0 4px}
+.sub{color:var(--muted)}
+.back{font:600 12px ui-monospace,monospace;text-decoration:none;border:1px solid var(--line);padding:8px 12px;border-radius:5px}
+.box{background:linear-gradient(145deg,#14201d,#101816);border:1px solid #293a35;border-radius:6px;padding:16px}
+.upload{display:grid;grid-template-columns:1.4fr 1fr;gap:18px;margin-top:22px}
+.drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:170px;border:2px dashed #3a5a50;border-radius:6px;cursor:pointer;text-align:center;padding:18px;transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--mint);background:#13221e}
+.drop b{font-size:17px}
+.drop input{display:none}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+button,.btn{font:600 12px ui-monospace,monospace;background:#17231f;color:var(--ink);border:1px solid #385047;border-radius:5px;padding:9px 13px;cursor:pointer;text-decoration:none}
+button:hover,.btn:hover{border-color:var(--mint)}
+button.primary{background:var(--mint);color:#07100d;border-color:var(--mint)}
+.small{font-size:12px;color:var(--muted)}
+.refs{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{font:600 11px ui-monospace,monospace;padding:3px 8px;border-radius:20px;background:#17231f;border:1px solid #2c433b;white-space:nowrap}
+.err{display:none;margin-top:14px;padding:12px;border:1px solid #7a3b37;background:#2a1817;color:#ffc9c4;border-radius:5px}
+#results{display:none}
+.status{margin:26px 0 16px;padding:16px 19px;background:#14211e;border:1px solid #2a4039;border-left:4px solid var(--mint);border-radius:5px}
+.status b{display:block;font-size:19px;margin:4px 0}
+.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+.metrics .box b{display:block;font:600 24px ui-monospace,monospace;margin:6px 0 2px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:8px 0;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.chart{width:100%;height:330px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #22332e;vertical-align:top}
+th{color:var(--muted);font:600 11px ui-monospace,monospace;text-transform:uppercase;letter-spacing:.6px}
+.tag{font:700 11px ui-monospace,monospace;padding:3px 8px;border-radius:4px;white-space:nowrap}
+.sensor{margin-top:16px}
+.sensor-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.sensor-head h3{margin:0;font-size:20px}
+.advice{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:6px}
+.advice ul{margin:6px 0 0;padding-left:18px}
+.advice li{margin:3px 0}
+.scroll{overflow-x:auto}
+footer{margin-top:34px;color:var(--muted);font-size:12px}
+.upload>*,.metrics>*,.advice>*{min-width:0}
+.chip{white-space:normal}
+@media(max-width:900px){main{padding:20px 16px 40px}.upload,.advice{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}h1{font-size:30px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div class="eye">NuclearRad AI · sensor health</div>
+    <a class="back" href="index.html">← Core monitor</a>
+  </div>
+  <h1>Sensor fault detector</h1>
+  <div class="sub">Upload your sensor readings. Every sensor is compared with an ideal healthy run and with the other sensors, and every abnormal reading is marked on the graphs.</div>
+
+  <section class="upload">
+    <label class="drop" id="drop">
+      <input id="file" type="file" accept=".xlsx,.xls,.csv">
+      <b>Drop your Excel or CSV file here</b>
+      <span class="small">or click to choose a file · one column per sensor, one row per reading</span>
+    </label>
+    <div class="box">
+      <div class="eye">Ideal reference</div>
+      <div id="refName" style="margin:6px 0 2px;font-weight:600"></div>
+      <div class="refs" id="refChips"></div>
+      <div class="small">Sensors are matched by number (RAD 1, RAD-01, Sensor 1…). A sensor whose normal level is far from the ideal is compared with its own first readings instead.</div>
+      <div class="btns">
+        <button class="primary" id="demo">Try a demo</button>
+        <button id="example">Download example file</button>
+        <label class="btn">Use my own ideal file<input id="refFile" type="file" accept=".xlsx,.xls,.csv" hidden></label>
+      </div>
+    </div>
+  </section>
+  <div class="err" id="err"></div>
+
+  <section id="results">
+    <div class="status" id="status"></div>
+    <div class="metrics" id="metrics"></div>
+
+    <h2>Anomaly map</h2>
+    <div class="sub">Each row is a sensor, each column a reading. Coloured cells are abnormal readings.</div>
+    <div class="legend" id="legend"></div>
+    <div class="box"><div id="map" class="chart" style="height:auto"></div></div>
+
+    <h2>Sensor summary</h2>
+    <div class="box scroll"><table id="summary"></table></div>
+    <div class="btns"><button id="csv">Download results (CSV)</button></div>
+
+    <h2>Sensor readings</h2>
+    <div class="sub">Grey line: raw readings · green line: trend · shaded band: ideal range · markers: abnormal readings.</div>
+    <div id="sensors"></div>
+  </section>
+
+  <footer>Decision support only. Confirm every finding with plant procedures before acting. Your file never leaves your browser.</footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const COLORS = { "Normal": "#1b2b27", "Drift high": "#ff746c", "Drift low": "#7cb3ff", "Spike": "#f3b969",
+  "Noisy": "#c99bff", "Stuck": "#a7b4af", "No signal": "#f4f7f5", "Real rise": "#ffe066" };
+const STATUS = { "Faulty": "#ff746c", "Watch": "#f3b969", "At risk": "#f3b969", "Healthy": "#8ee2bd" };
+const MAX_ROWS = 20000, MIN_ROWS = 30;
+let reference = Detector.REFERENCE, table = null, result = null;
+
+// ------------------------------------------------------------------ reading files
+function excelTime(v) {
+  return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 19).replace("T", " ");
+}
+
+function toTable(workbook, label) {
+  // pick the sheet that holds readings: named like "Readings"/"Data", else the first with numbers
+  const sheets = workbook.SheetNames.map((name) => ({
+    name, rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, defval: null }),
+  }));
+  const sheet = sheets.find((s) => /read|data/i.test(s.name) && s.rows.length > 1)
+    || sheets.find((s) => s.rows.slice(1, 20).some((r) => r.filter((v) => typeof v === "number").length >= 2))
+    || sheets[0];
+  const head = (sheet.rows[0] || []).map((h, i) => (h === null || h === "" ? `Column ${i + 1}` : String(h).trim()));
+  const body = sheet.rows.slice(1).filter((r) => r.some((v) => v !== null && v !== ""));
+  if (!body.length) throw new Error(`${label} has no readings under its header row.`);
+
+  let timeCol = head.findIndex((h) => /time|date|stamp/i.test(h));
+  if (timeCol < 0 && body.slice(0, 20).every((r) => typeof r[0] === "string" && isNaN(parseFloat(r[0])))) timeCol = 0;
+  const names = [], columns = [];
+  head.forEach((h, c) => {
+    // skip the time column and answer/label columns such as Anomaly_Active or Faulty_Sensor
+    if (c === timeCol || /anomal|leak|fault|label|status|flag|class/i.test(h)) return;
+    const col = body.map((r) => (typeof r[c] === "number" ? r[c] : r[c] === null || r[c] === "" ? NaN : parseFloat(r[c])));
+    if (col.filter(Number.isFinite).length >= col.length / 2) { names.push(h); columns.push(col); }
+  });
+  let times = null;
+  if (timeCol >= 0) {
+    times = body.map((r) => r[timeCol]);
+    const serial = times.every((v) => typeof v === "number" && v > 20000 && v < 80000);
+    times = times.map((v) => (serial ? excelTime(v) : v));
+  }
+  return { names, columns, times, sheet: sheet.name, rows: body.length };
+}
+
+async function readWorkbook(file) {
+  const data = new Uint8Array(await file.arrayBuffer());
+  return XLSX.read(data, { type: "array" });
+}
+
+// ------------------------------------------------------------------ running
+function showError(msg) { $("err").style.display = msg ? "block" : "none"; $("err").textContent = msg || ""; }
+
+function run(t) {
+  showError("");
+  if (!t.names.length) return showError(`No sensor columns found in "${t.sheet}". Put one sensor per column with a name in the first row.`);
+  if (t.rows < MIN_ROWS) return showError(`Need at least ${MIN_ROWS} readings; this file has ${t.rows}.`);
+  if (t.rows > MAX_ROWS) {
+    t.columns = t.columns.map((c) => c.slice(-MAX_ROWS));
+    t.times = t.times && t.times.slice(-MAX_ROWS);
+    t.rows = MAX_ROWS;
+    t.trimmed = true;
+  }
+  table = t;
+  result = Detector.analyse(t.names, t.columns, { reference });
+  render();
+}
+
+async function openFile(file) {
+  if (!file) return;
+  try { run({ ...toTable(await readWorkbook(file), file.name), file: file.name }); }
+  catch (e) { showError(`Could not read ${file.name}: ${e.message}`); }
+}
+
+// ------------------------------------------------------------------ demo data
+function demoTable() {
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() || 1e-9)) * Math.cos(2 * Math.PI * rnd());
+  const n = 600, names = [1, 2, 3, 4, 5].map((i) => `RAD ${i}`);
+  const columns = names.map((_, i) => {
+    const r = Detector.REFERENCE.sensors[i + 1];
+    return Array.from({ length: n }, () => +(r.mean + r.sd * gauss()).toFixed(3));
+  });
+  for (let t = 300; t < n; t++) columns[2][t] = +(columns[2][t] * (1 + 0.0025 * (t - 300))).toFixed(3); // RAD 3 drifts up
+  [150, 151, 420].forEach((t) => (columns[4][t] = +(columns[4][t] * 3.5).toFixed(3)));                 // RAD 5 spikes
+  for (let t = 200; t < 230; t++) columns[3][t] = NaN;                                                 // RAD 4 drops out
+  const times = Array.from({ length: n }, (_, t) => excelTime(46319 + 8 / 24 + t / 1440));
+  return { names, columns, times, sheet: "Demo", rows: n, file: "Demo data" };
+}
+
+function downloadExample() {
+  const t = demoTable();
+  const rows = [["Timestamp", ...t.names]].concat(t.times.map((time, i) => [time, ...t.columns.map((c) => (Number.isFinite(c[i]) ? c[i] : null))]));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), "Readings");
+  XLSX.writeFile(wb, "sensor_readings_example.xlsx");
+}
+
+// ------------------------------------------------------------------ rendering
+const fmt = Detector.fmt;
+const plotLayout = (extra) => Object.assign({
+  paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+  font: { color: "#c9d3ce", family: "system-ui, sans-serif", size: 12 },
+  margin: { l: 56, r: 14, t: 14, b: 40 },
+  xaxis: { gridcolor: "#22332e", zeroline: false, title: { text: table.times ? "Time" : "Reading #" } },
+  yaxis: { gridcolor: "#22332e", zeroline: false },
+  legend: { orientation: "h", y: -0.22 },
+  hovermode: "closest",
+}, extra);
+const plotConfig = { displaylogo: false, responsive: true, modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d"] };
+
+function eventShapes(xs) {
+  const shapes = [];
+  let start = null;
+  const ev = new Set(result.events);
+  for (let t = 0; t <= result.n; t++) {
+    if (ev.has(t) && start === null) start = t;
+    if (!ev.has(t) && start !== null) {
+      shapes.push({ type: "rect", xref: "x", yref: "paper", x0: xs[start], x1: xs[t - 1], y0: 0, y1: 1,
+        fillcolor: "rgba(255,224,102,0.12)", line: { width: 0 } });
+      start = null;
+    }
+  }
+  return shapes;
+}
+
+function render() {
+  $("results").style.display = "block";   // visible before plotting, so charts get their full width
+  const r = result, xs = table.times || Array.from({ length: r.n }, (_, i) => i + 1);
+  const statusColor = { event: "var(--red)", fault: "var(--red)", watch: "var(--amber)", ok: "var(--mint)" }[r.verdict.level];
+  const statusLabel = { event: "ESCALATION", fault: "SENSOR FAULT", watch: "ATTENTION", ok: "ALL NORMAL" }[r.verdict.level];
+  $("status").style.borderLeftColor = statusColor;
+  $("status").innerHTML = `<div class="eye" style="color:${statusColor}">${statusLabel} · ${esc(table.file)}${table.sheet !== "Demo" ? " · sheet " + esc(table.sheet) : ""}</div>`
+    + `<b>${esc(r.verdict.text)}</b><span class="small">${r.n} readings × ${r.sensors.length} sensors`
+    + `${table.trimmed ? ` (most recent ${MAX_ROWS} rows only)` : ""}`
+    + `${r.peerMode ? "" : " · fewer than 3 sensors, so peer comparison is off"}</span>`;
+
+  const count = (st) => r.sensors.filter((s) => s.status === st).length;
+  const abnormal = r.sensors.reduce((a, s) => a + s.anomalies, 0);
+  const metric = (label, value, foot) => `<div class="box">${label}<b>${value}</b><span class="small">${foot}</span></div>`;
+  $("metrics").innerHTML = metric("Sensors analysed", r.sensors.length, `${r.sensors.filter((s) => s.mode === "reference").length} matched to the ideal`)
+    + metric("Faulty now", count("Faulty"), "need action")
+    + metric("Need attention", count("Watch") + count("At risk"), "intermittent or trending")
+    + metric("Abnormal readings", `${(100 * abnormal / (r.n * r.sensors.length)).toFixed(1)}%`, `${abnormal} of ${r.n * r.sensors.length}`)
+    + metric("Level vs ideal", r.plantVsIdeal === null ? "n/a" : `${r.plantVsIdeal >= 0 ? "+" : ""}${r.plantVsIdeal.toFixed(1)}%`, "median of matched sensors");
+
+  // anomaly map
+  const types = Detector.TYPES;
+  $("legend").innerHTML = types.filter((t) => t !== "Normal").map((t) => `<span><i style="background:${COLORS[t]}"></i>${t}</span>`).join("");
+  const scale = [];
+  types.forEach((t, i) => { scale.push([i / types.length, COLORS[t]], [(i + 1) / types.length, COLORS[t]]); });
+  Plotly.newPlot("map", [{
+    type: "heatmap", x: xs, y: r.sensors.map((s) => s.name),
+    z: r.sensors.map((s) => s.type.map((t) => types.indexOf(t))),
+    text: r.sensors.map((s) => s.type), hovertemplate: "%{y}<br>%{x}<br><b>%{text}</b><extra></extra>",
+    colorscale: scale, zmin: -0.5, zmax: types.length - 0.5, showscale: false, xgap: 0, ygap: 3,
+  }], plotLayout({ height: 70 + 34 * r.sensors.length, margin: { l: 110, r: 14, t: 8, b: 40 }, yaxis: { autorange: "reversed" } }), plotConfig);
+
+  // summary table, worst first
+  const order = { Faulty: 0, "At risk": 1, Watch: 2, Healthy: 3 };
+  const ranked = [...r.sensors].sort((a, b) => order[a.status] - order[b.status] || b.anomalies - a.anomalies);
+  $("summary").innerHTML = "<tr><th>Sensor</th><th>Status</th><th>Main issue</th><th>Abnormal readings</th><th>Off peers now</th><th>First problem</th><th>What it means</th></tr>"
+    + ranked.map((s) => `<tr><td><b>${esc(s.name)}</b></td>`
+      + `<td><span class="tag" style="background:${STATUS[s.status]}22;color:${STATUS[s.status]}">${s.status}</span></td>`
+      + `<td>${s.fault || "—"}</td><td>${s.anomalies} (${s.anomalyPct.toFixed(1)}%)</td>`
+      + `<td>${s.devPct >= 0 ? "+" : ""}${s.devPct.toFixed(1)}%</td>`
+      + `<td>${s.firstIssue >= 0 ? esc(String(xs[s.firstIssue])) : "—"}</td><td>${esc(s.summary)}</td></tr>`).join("");
+
+  // one chart per sensor, in file order
+  const shapes = eventShapes(xs);
+  $("sensors").innerHTML = r.sensors.map((s, i) => `<div class="box sensor">
+      <div class="sensor-head"><h3>${esc(s.name)} <span class="tag" style="background:${STATUS[s.status]}22;color:${STATUS[s.status]}">${s.status}</span></h3>
+      <span class="small">${s.anomalies} abnormal readings · trend ${s.devPct >= 0 ? "+" : ""}${s.devPct.toFixed(1)}% vs peers</span></div>
+      <div class="small">${esc(s.note)}</div>
+      <div id="chart${i}" class="chart"></div>
+      <div class="advice"><div><div class="eye">Finding</div>${esc(s.summary)}</div>
+      <div><div class="eye">What to do</div>${s.advice.length ? `<ul>${s.advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : "No action needed."}</div></div>
+    </div>`).join("");
+
+  r.sensors.forEach((s, i) => {
+    const lo = s.mean - 3 * s.sd, hi = s.mean + 3 * s.sd;
+    const band = s.mode === "reference" ? "Ideal range" : "Normal range";
+    const traces = [
+      { x: [xs[0], xs[xs.length - 1]], y: [lo, lo], mode: "lines", line: { width: 0 }, hoverinfo: "skip", showlegend: false },
+      { x: [xs[0], xs[xs.length - 1]], y: [hi, hi], mode: "lines", line: { width: 0 }, fill: "tonexty", fillcolor: "rgba(142,226,189,0.10)", name: band, hoverinfo: "skip" },
+      { x: [xs[0], xs[xs.length - 1]], y: [s.mean, s.mean], mode: "lines", line: { color: "#8ee2bd", dash: "dash", width: 1 }, name: s.mode === "reference" ? "Ideal level" : "Normal level", hoverinfo: "skip" },
+      { x: xs, y: s.x, mode: "lines", line: { color: "rgba(214,224,219,0.45)", width: 1 }, name: "Reading", hovertemplate: "%{x}<br>%{y}<extra>Reading</extra>" },
+      { x: xs, y: s.level, mode: "lines", line: { color: "#8ee2bd", width: 2 }, name: "Trend", hovertemplate: "%{x}<br>%{y:.4g}<extra>Trend</extra>" },
+    ];
+    for (const t of Detector.TYPES) {
+      if (t === "Normal") continue;
+      const idx = s.type.map((v, k) => (v === t ? k : -1)).filter((k) => k >= 0);
+      if (!idx.length) continue;
+      traces.push({
+        x: idx.map((k) => xs[k]), y: idx.map((k) => (Number.isFinite(s.x[k]) ? s.x[k] : s.mean)),
+        mode: "markers", name: t, marker: { color: COLORS[t], size: t === "Spike" ? 9 : 6, symbol: t === "No signal" ? "x" : "circle" },
+        hovertemplate: `%{x}<br>${t}<extra></extra>`,
+      });
+    }
+    Plotly.newPlot(`chart${i}`, traces, plotLayout({ shapes, yaxis: { gridcolor: "#22332e", zeroline: false, title: { text: reference.units && s.mode === "reference" ? reference.units : "Reading" } } }), plotConfig);
+  });
+
+  $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function downloadCsv() {
+  const r = result, xs = table.times || Array.from({ length: r.n }, (_, i) => i + 1);
+  const head = [table.times ? "Time" : "Reading"].concat(...r.sensors.map((s) => [s.name, `${s.name} status`]));
+  const lines = [head.map(csvCell).join(",")];
+  for (let t = 0; t < r.n; t++) lines.push([xs[t], ...r.sensors.flatMap((s) => [Number.isFinite(s.x[t]) ? s.x[t] : "", s.type[t]])].map(csvCell).join(","));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+  a.download = "sensor_anomalies.csv";
+  a.click();
+}
+
+function showReference() {
+  $("refName").textContent = reference.name;
+  $("refChips").innerHTML = Object.entries(reference.sensors)
+    .map(([id, s]) => `<span class="chip">${/^\d+$/.test(id) ? "RAD " + id : esc(id)}: ${fmt(s.mean)} ± ${fmt(s.sd)} ${esc(reference.units)}</span>`).join("");
+}
+
+const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const csvCell = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+
+// ------------------------------------------------------------------ wiring
+$("file").onchange = (e) => openFile(e.target.files[0]);
+$("demo").onclick = () => run(demoTable());
+$("example").onclick = downloadExample;
+$("csv").onclick = downloadCsv;
+$("refFile").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const t = toTable(await readWorkbook(file), file.name);
+    if (!t.names.length) throw new Error("no sensor columns found");
+    reference = Detector.profileFrom(t.names, t.columns, `Your ideal file: ${file.name}`);
+    showReference();
+    if (table) run(table);
+  } catch (err) { showError(`Could not use ${file.name} as the ideal reference: ${err.message}`); }
+};
+const drop = $("drop");
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => openFile(e.dataTransfer.files[0]));
+showReference();
+if (location.hash === "#demo") run(demoTable());
+</script>
+</body>
 </html>
