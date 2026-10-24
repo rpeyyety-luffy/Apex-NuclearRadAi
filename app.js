@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+const expectedSensors = ['RAD-01', 'RAD-02', 'RAD-03', 'RAD-04', 'RAD-05'];
 const colors = { raw: '#ff746c', peer: '#8ee2bd', threshold: '#f3b969', grid: '#2d3d38' };
 
 function median(values) {
@@ -38,12 +39,18 @@ function demoRows() {
 function normalizeRows(rawRows) {
   if (!rawRows.length) throw new Error('The selected sheet has no data rows.');
   const headers = Object.keys(rawRows[0]);
-  const sensors = headers.filter((header) => /^rad[-_ ]?\d+/i.test(String(header))).map(String);
-  if (!sensors.length) throw new Error('No RAD columns were found. Name sensor columns like RAD-01, RAD-02, and RAD-03.');
+  const canonical = (header) => String(header).trim().toUpperCase().replace(/[-_ ]/g, '');
+  const headerFor = new Map(expectedSensors.map((sensor) => [
+    sensor,
+    headers.find((header) => canonical(header) === canonical(sensor))
+  ]));
+  const missing = expectedSensors.filter((sensor) => !headerFor.get(sensor));
+  if (missing.length) throw new Error(`Missing required column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. The sheet must contain RAD-01 through RAD-05.`);
+  const sensors = expectedSensors;
   const indexHeader = headers.find((header) => /^(sample|time|timestamp|date)$/i.test(String(header)));
   const rows = rawRows.map((row, index) => ({
     label: indexHeader && row[indexHeader] !== undefined && row[indexHeader] !== '' ? String(row[indexHeader]) : String(index),
-    values: sensors.map((sensor) => numeric(row[sensor]))
+    values: sensors.map((sensor) => numeric(row[headerFor.get(sensor)]))
   })).filter((row) => row.values.some(Number.isFinite));
   if (rows.length < 5) throw new Error('At least five rows with numeric RAD readings are required.');
   return { sensors, rows };
