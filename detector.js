@@ -30,6 +30,9 @@
   const STUCK_RUN = 8;        // identical readings in a row = stuck
   const EVENT_RISE = 0.20;    // most sensors 20%+ above normal together = real radiation rise, not a fault
   const EVENT_SHARE = 0.6;    // "most" = this share of the sensors reporting
+  const EVENT_FALL = 0.05;    // most sensors 5%+ below normal together = real pressure loss (leak)
+  const FULL_LEAK = 0.25;     // plant level below 25% of normal = full leak: pressure has collapsed to near zero
+  const LEAK_STABLE = 0.02;   // plant level moving less than 2% of normal over the recent readings = stabilised
 
   const TYPES = ["Normal", "Drift high", "Drift low", "Spike", "Noisy", "Stuck", "No signal", "Real rise"];
 
@@ -193,6 +196,7 @@
       s.thr = Math.max(LEVEL_SIGMA * Math.hypot(s.se, peerSe), MIN_SHIFT);
     }
     const events = [];
+    const fallen = new Array(n).fill(false);
     const counting = (s, t) => Math.sqrt(Math.max(1, s.norm[t] || 1)); // Poisson: scatter grows with level
     // noise and spikes are judged against the peers' roughness at the same moment: when the whole
     // plant becomes rough (e.g. pressure collapsing in a leak) that is the plant, not one sensor
@@ -256,6 +260,9 @@
       const high = live.filter((s) => s.norm[t] - 1 > Math.max(EVENT_RISE, s.thr) && Math.abs(s.rel[t]) <= s.thr);
       const event = live.length >= 3 && high.length >= EVENT_SHARE * live.length;
       if (event) events.push(t);
+      // a leak is the mirror image: most sensors that still agree with each other fall together
+      const low = live.filter((s) => 1 - s.norm[t] > Math.max(EVENT_FALL, s.thr) && Math.abs(s.rel[t]) <= s.thr);
+      fallen[t] = live.length >= 3 && low.length >= EVENT_SHARE * live.length;
       sensors.forEach((s, i) => {
         let type;
         if (!Number.isFinite(s.x[t])) type = "No signal";
@@ -334,13 +341,50 @@
       s.advice = s.fault ? ADVICE[s.fault] : [];
     }
 
+    // ----------------------------------------------------------- leak: full or partial
+    // A leak is reported when the leak model flags it at the end of the file, or when most sensors
+    // that agree with each other have fallen together over the last readings (rule backstop).
+    const endN = Math.max(5, Math.round(n * 0.05));
+    const modelLeak = leakReadings.length > 0 && leakReadings[leakReadings.length - 1] >= n - endN;
+    const ruleLeak = fallen.slice(-endN).every(Boolean);
+    let leak = null;
+    if (modelLeak || ruleLeak) {
+      // plant level = median of the sensors not judged faulty, so a faulty sensor cannot hide or fake the drop
+      const healthy = sensors.filter((s) => s.status !== "Faulty");
+      const pool = healthy.length >= 3 ? healthy : sensors;
+      const plant = Array.from({ length: n }, (_, t) => median(pool.map((s) => s.norm[t])));
+      const endLevel = median(plant.slice(-endN));
+      const recentLevels = plant.slice(-recent);
+      const change = slope(recentLevels) * recentLevels.length;     // change across the recent readings
+      let start = n - 1;
+      while (start > 0 && (fallen[start - 1] || (leakProb && leakProb[start - 1] >= models.leak.threshold))) start--;
+      if (modelLeak) start = Math.min(start, leakReadings[0]);
+      const normal = median(pool.map((s) => s.mean));
+      leak = {
+        kind: endLevel < FULL_LEAK ? "full" : "partial", start, endLevel, normal, endValue: endLevel * normal,
+        stable: Math.abs(change) < LEAK_STABLE, source: modelLeak && ruleLeak ? "model and rule" : modelLeak ? "leak model" : "rule",
+        prob: leakProb ? leakProb[n - 1] : null,
+      };
+    }
+
     let verdict;
-    const leakNow = leakReadings.length && leakReadings[leakReadings.length - 1] >= n - Math.max(5, Math.round(n * 0.05));
-    if (leakNow) {
-      const faulty = sensors.filter((s) => s.status === "Faulty");
-      verdict = { level: "event", text: `Real pressure loss: all sensors are falling together from about reading ${leakReadings[0] + 1}`
-        + ` (the leak model rates it ${Math.round(100 * leakProb[n - 1])}% likely). This is the plant, not a sensor fault. Escalate to operators.`
-        + (faulty.length ? ` Separately, ${faulty.map((s) => `${s.name} (${s.fault.toLowerCase()})`).join(", ")} ${faulty.length > 1 ? "show their" : "shows its"} own fault.` : "") };
+    if (leak) {
+      const flagged = sensors.filter((s) => s.status !== "Healthy");
+      const others = flagged.length
+        ? ` On top of the leak, ${flagged.map((s) => `${s.name} (${s.status === "Faulty" ? "" : `${s.status.toLowerCase()}: `}${s.fault.toLowerCase()})`).join(", ")} ${flagged.length > 1 ? "disagree" : "disagrees"} with the other sensors: a sensor fault, not part of the leak.`
+        : " No sensor shows its own fault: every sensor follows the same drop.";
+      const how = leak.prob !== null && leak.source !== "rule" ? ` The leak model rates it ${Math.round(100 * leak.prob)}% likely.` : "";
+      if (leak.kind === "full") {
+        verdict = { level: "event", kind: "full", text: `Full leak: every sensor fell together from about ${fmt(leak.normal)} to near zero`
+          + ` (${fmt(leak.endValue)}, ${Math.round(100 * leak.endLevel)}% of normal) from about reading ${leak.start + 1}.`
+          + ` The sensors agree with each other, so this is not peer drift or a sensor fault: the plant has lost its pressure.${how}`
+          + ` Maximum danger: escalate to operators immediately.${others}` };
+      } else {
+        verdict = { level: "event", kind: "partial", text: `Real leak: all sensors dropped together from about ${fmt(leak.normal)}, starting near reading ${leak.start + 1},`
+          + (leak.stable ? ` and stabilised midway at about ${fmt(leak.endValue)} (${Math.round(100 * leak.endLevel)}% of normal).`
+            : ` and are still falling (now ${fmt(leak.endValue)}, ${Math.round(100 * leak.endLevel)}% of normal).`)
+          + ` This is the plant, not a sensor fault.${how} Escalate to operators.${others}` };
+      }
     } else if (events.length) verdict = { level: "event", text: `Possible real radiation rise: most sensors rose together in ${events.length} readings. Escalate to operators.` };
     else if (sensors.some((s) => s.status === "Faulty")) verdict = { level: "fault", text: "Sensor fault detected. The other sensors stay normal, so the faulty sensor is the suspect, not the plant." };
     else if (sensors.some((s) => s.status !== "Healthy")) verdict = { level: "watch", text: "No sensor is failing right now, but some need attention." };
@@ -350,7 +394,9 @@
     const refSensors = sensors.filter((s) => s.mode === "reference");
     const plantVsIdeal = refSensors.length ? 100 * (median(refSensors.map((s) => median(s.norm))) - 1) : null;
 
-    return { sensors, events, leak: leakProb ? { prob: leakProb, readings: leakReadings } : null, verdict, plantVsIdeal, peerMode, window: w, baseN, n, reference, advice: ADVICE };
+    // readings to shade as the leak: the model's flags plus the rule's run up to the end of the file
+    const leakSpan = leak ? [...new Set([...leakReadings, ...Array.from({ length: n - leak.start }, (_, k) => leak.start + k)])].sort((a, b) => a - b) : [];
+    return { sensors, events, leak: leak ? { ...leak, prob: leakProb, readings: leakSpan } : null, verdict, plantVsIdeal, peerMode, window: w, baseN, n, reference, advice: ADVICE };
   }
 
   function fmt(v) {

@@ -2,7 +2,9 @@
    Run: node ml/test_detector.js   (exits with code 1 if any case fails)
 
    1. Every CSV: the labelled faulty sensor is flagged with the fault type its file name names,
-      every other sensor is Healthy, and the verdict is a plant event exactly when Real_Leak is set.
+      every other sensor is Healthy, and the verdict is a plant event exactly when Real_Leak is set:
+      a full leak for realleak_maxdanger.csv (pressure collapses to near zero), a partial leak for
+      the realleak<N>_<fault>.csv files (pressure drops and stabilises midway).
    2. Stress cases built on realleak_maxdanger.csv (all sensors collapse together): a sensor fault
       injected into sensors 1, 3 and 5 in turn must still be found, with the leak still reported
       as a plant event and the other sensors Healthy. */
@@ -34,7 +36,7 @@ const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
 const gauss = () => Math.sqrt(-2 * Math.log(rand() || 1e-9)) * Math.cos(2 * Math.PI * rand());
 
 let passed = 0, failed = 0;
-function check(label, columns, faulty, expected, leak) {
+function check(label, columns, faulty, expected, leak, leakKind) {
   const res = Detector.analyse(NAMES, columns);
   const problems = [];
   res.sensors.forEach((s, i) => {
@@ -45,6 +47,8 @@ function check(label, columns, faulty, expected, leak) {
     } else if (s.status !== "Healthy") problems.push(`${s.name} should be Healthy but is ${s.status}: ${s.fault}`);
   });
   if ((res.verdict.level === "event") !== leak) problems.push(`verdict ${res.verdict.level}, expected ${leak ? "event" : "not event"}`);
+  // a full leak collapses to near zero; a partial leak drops and stabilises midway
+  else if (leak && res.verdict.kind !== leakKind) problems.push(`leak reported as ${res.verdict.kind}, expected ${leakKind}`);
   if (problems.length) { failed++; console.log(`FAIL ${label}\n     ${problems.join("\n     ")}`); }
   else { passed++; console.log(`ok   ${label}`); }
 }
@@ -54,7 +58,7 @@ for (const file of fs.readdirSync(DATA).filter((f) => f.endsWith(".csv")).sort()
   const d = loadCsv(path.join(DATA, file));
   const kind = Object.keys(KIND).find((k) => file.replace(/^realleak\d*_?/, "").startsWith(k));
   const expected = d.faulty && kind ? KIND[kind] : null;
-  check(file, d.columns, expected ? d.faulty : 0, expected, d.leak);
+  check(file, d.columns, expected ? d.faulty : 0, expected, d.leak, file.includes("maxdanger") ? "full" : "partial");
 }
 
 // 2. sensor faults injected into the max-danger leak
@@ -75,7 +79,7 @@ for (const [label, expected, inject] of STRESS) {
   for (const sensor of [1, 3, 5]) {
     const columns = base.columns.map((c) => c.slice());
     inject(columns[sensor - 1]);
-    check(`maxdanger + S${sensor} ${label}`, columns, sensor, expected, true);
+    check(`maxdanger + S${sensor} ${label}`, columns, sensor, expected, true, "full");
   }
 }
 

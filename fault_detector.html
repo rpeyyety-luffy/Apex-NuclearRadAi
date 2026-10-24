@@ -239,7 +239,8 @@ function render() {
   $("results").style.display = "block";   // visible before plotting, so charts get their full width
   const r = result, xs = table.times || Array.from({ length: r.n }, (_, i) => i + 1);
   const statusColor = { event: "var(--red)", fault: "var(--red)", watch: "var(--amber)", ok: "var(--mint)" }[r.verdict.level];
-  const statusLabel = { event: "ESCALATION", fault: "SENSOR FAULT", watch: "ATTENTION", ok: "ALL NORMAL" }[r.verdict.level];
+  const statusLabel = r.verdict.kind === "full" ? "FULL LEAK · MAXIMUM DANGER" : r.verdict.kind === "partial" ? "REAL LEAK · ESCALATION"
+    : { event: "ESCALATION", fault: "SENSOR FAULT", watch: "ATTENTION", ok: "ALL NORMAL" }[r.verdict.level];
   $("status").style.borderLeftColor = statusColor;
   $("status").innerHTML = `<div class="eye" style="color:${statusColor}">${statusLabel} · ${esc(table.file)}${table.sheet !== "Demo" ? " · sheet " + esc(table.sheet) : ""}</div>`
     + `<b>${esc(r.verdict.text)}</b><span class="small">${r.n} readings × ${r.sensors.length} sensors`

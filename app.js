@@ -139,10 +139,14 @@ function render(report) {
   ].map(([label, value]) => `<div class="metric">${label}<b>${value}</b><span class="small">uploaded data set</span></div>`).join('');
   $('summary').classList.add('show');
   const { level, text } = report.verdict;
-  const leak = text.startsWith('Real pressure loss');
   const n = report.active.length, channels = `${n} channel${n === 1 ? '' : 's'}`;
+  const plus = n ? ` + ${n} faulty sensor${n === 1 ? '' : 's'}` : '';
+  const leak = report.leak;
+  const eventBanner = !leak ? ['var(--red)', 'PLANT EVENT · NOT A SENSOR FAULT', 'Possible real radiation rise']
+    : leak.kind === 'full' ? ['var(--red)', 'FULL LEAK · MAXIMUM DANGER', `Full pressure loss: every sensor near zero${plus}`]
+    : ['var(--red)', 'REAL LEAK · NOT A SENSOR FAULT', `Real leak: pressure ${leak.stable ? 'dropped and stabilised' : 'dropping'} at about ${leak.endValue.toFixed(1)}${plus}`];
   const banner = {
-    event: ['var(--red)', 'PLANT EVENT · NOT A SENSOR FAULT', leak ? 'Real pressure loss across the plant' : 'Possible real radiation rise'],
+    event: eventBanner,
     fault: ['var(--amber)', 'SENSOR FAULT', `${channels} need${n === 1 ? 's' : ''} review`],
     watch: ['var(--amber)', 'ATTENTION', `${channels} need${n === 1 ? 's' : ''} attention`],
     ok: ['var(--mint)', 'SYSTEM NOMINAL', 'No data-quality anomalies detected'],
