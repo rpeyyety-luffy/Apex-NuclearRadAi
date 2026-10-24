@@ -171,5 +171,5 @@ $('file').addEventListener('change', (event) => {
   reader.readAsArrayBuffer(file);
 });
 $('demo').addEventListener('click', () => loadRows(demoRows(), 'Demo data'));
-if (location.hash === '#demo') loadRows(demoRows(), 'Demo data');
 renderCore();
+if (location.hash === '#demo') loadRows(demoRows(), 'Demo data');
