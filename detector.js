@@ -26,6 +26,7 @@
   const MIN_SHIFT = 0.01;     // ... and at least 1% away, so tiny calibration differences do not alarm
   const SPIKE_SIGMA = 5;      // one reading this far from the local trend = spike
   const NOISE_RATIO = 3;      // scatter this many times the normal scatter = noisy
+  const NOISE_RUN = 5;        // readings in a row the noise model must flag
   const STUCK_RUN = 8;        // identical readings in a row = stuck
   const EVENT_RISE = 0.20;    // most sensors 20%+ above normal together = real radiation rise, not a fault
   const EVENT_SHARE = 0.6;    // "most" = this share of the sensors reporting
@@ -201,13 +202,24 @@
     // drift: the machine-learned model (driftml.js) catches drift early; the trend rule stays as a
     // backstop for small shifts on very noisy sensors, which the training data did not cover
     // dropout: the dropout model rates how likely each sensor is to keep losing its signal
+    // noise: the noise model and the scatter rule each flag a noisy sensor (either one is enough)
+    // leak: the leak model rates the whole plant; sensors falling together is a real pressure loss
     const FML = typeof FaultML !== "undefined" ? FaultML : typeof require === "function" ? require("./faultml.js") : null;
     const models = opts.ml !== false && FML ? FML.MODELS : {};
     const ml = peerMode && models.drift ? FML.predict("drift", columns, baseN) : null;
     const dropML = models.dropout ? FML.predict("dropout", columns, baseN) : null;
+    const noiseML = peerMode && models.noise ? FML.predict("noise", columns, baseN) : null;
+    const leakProb = peerMode && models.leak ? FML.predict("leak", columns, baseN)[0].map((r) => r.p) : null;
+    // like noise, a leak lasts: it counts once the model has flagged NOISE_RUN readings in a row
+    const leakReadings = leakProb ? leakProb.map((_, t) => t).filter((t) => t >= NOISE_RUN - 1
+      && leakProb.slice(t - NOISE_RUN + 1, t + 1).every((p) => p >= models.leak.threshold)) : [];
     sensors.forEach((s, i) => {
       s.driftProb = ml ? ml[i].map((r) => r.p) : null;
       s.dropoutProb = dropML ? dropML[i].map((r) => r.p) : null;
+      s.noiseProb = noiseML ? noiseML[i].map((r) => r.p) : null;
+      // excess noise lasts, so the model must flag NOISE_RUN readings in a row before it counts
+      s.noiseML = s.noiseProb ? s.noiseProb.map((_, t) => t >= NOISE_RUN - 1
+        && s.noiseProb.slice(t - NOISE_RUN + 1, t + 1).every((p) => p >= models.noise.threshold)) : null;
     });
     const drift = (s, i, t) => {
       if (ml && ml[i][t].p >= models.drift.threshold) return ml[i][t].direction > 0 ? "Drift high" : "Drift low";
@@ -229,7 +241,7 @@
         let type;
         if (!Number.isFinite(s.x[t])) type = "No signal";
         else if (s.stuck[t]) type = "Stuck";
-        else if (noisy(s, t)) type = "Noisy";
+        else if (noisy(s, t) || (s.noiseML && s.noiseML[t])) type = "Noisy";
         else if (Math.abs(s.x[t] - s.level[t]) > SPIKE_SIGMA * s.sd * counting(s, t)) type = "Spike";
         else if (drift(s, i, t)) type = drift(s, i, t);
         else if (event && high.includes(s)) type = "Real rise";
@@ -295,7 +307,13 @@
     }
 
     let verdict;
-    if (events.length) verdict = { level: "event", text: `Possible real radiation rise: most sensors rose together in ${events.length} readings. Escalate to operators.` };
+    const leakNow = leakReadings.length && leakReadings[leakReadings.length - 1] >= n - Math.max(5, Math.round(n * 0.05));
+    if (leakNow) {
+      const faulty = sensors.filter((s) => s.status === "Faulty");
+      verdict = { level: "event", text: `Real pressure loss: all sensors are falling together from about reading ${leakReadings[0] + 1}`
+        + ` (the leak model rates it ${Math.round(100 * leakProb[n - 1])}% likely). This is the plant, not a sensor fault. Escalate to operators.`
+        + (faulty.length ? ` Separately, ${faulty.map((s) => `${s.name} (${s.fault.toLowerCase()})`).join(", ")} ${faulty.length > 1 ? "show their" : "shows its"} own fault.` : "") };
+    } else if (events.length) verdict = { level: "event", text: `Possible real radiation rise: most sensors rose together in ${events.length} readings. Escalate to operators.` };
     else if (sensors.some((s) => s.status === "Faulty")) verdict = { level: "fault", text: "Sensor fault detected. The other sensors stay normal, so the faulty sensor is the suspect, not the plant." };
     else if (sensors.some((s) => s.status !== "Healthy")) verdict = { level: "watch", text: "No sensor is failing right now, but some need attention." };
     else verdict = { level: "ok", text: "All sensors match normal behaviour." };
@@ -304,7 +322,7 @@
     const refSensors = sensors.filter((s) => s.mode === "reference");
     const plantVsIdeal = refSensors.length ? 100 * (median(refSensors.map((s) => median(s.norm))) - 1) : null;
 
-    return { sensors, events, verdict, plantVsIdeal, peerMode, window: w, baseN, n, reference, advice: ADVICE };
+    return { sensors, events, leak: leakProb ? { prob: leakProb, readings: leakReadings } : null, verdict, plantVsIdeal, peerMode, window: w, baseN, n, reference, advice: ADVICE };
   }
 
   function fmt(v) {

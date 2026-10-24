@@ -3,12 +3,16 @@
    Data (ml/data), one CSV per recording:
      drift*.csv    one sensor slowly drifts away from the others
      dropout*.csv  one sensor loses its signal in several intervals (blank cells)
+     noise*.csv    one sensor's reading-to-reading noise becomes ~12x larger
+     realleak*_<fault>.csv  a real coolant leak: pressure falls on all sensors, and one sensor
+                   also has its own fault (dropout, noise, drift or spike, named in the file name)
      normal_*.csv  healthy recording, used only as normal (negative) examples
-   Labelled files have Anomaly_Active = 1 while the fault is active and Faulty_Sensor = the
-   index of the bad sensor; the file name gives the fault type.
+   Labelled files have Anomaly_Active = 1 while the fault or leak is active, Real_Leak = 1 while
+   the pressure loss is real and Faulty_Sensor = the index of the bad sensor.
 
-   Each model learns its own fault type; every other reading of every file (healthy sensors,
-   healthy stretches, the other fault type) is a negative example. Each file is scored by a
+   Each sensor model learns its own fault type; every other reading of every file (healthy sensors,
+   healthy stretches, the other fault types) is a negative example. The leak model rates the whole
+   plant at each reading and learns from the Real_Leak column. Each file is scored by a
    model trained on the other files (leave-one-file-out), then the final models are trained on
    everything and written into faultml.js. */
 const fs = require("fs");
@@ -17,8 +21,8 @@ const FaultML = require("../faultml.js");
 const Detector = require("../detector.js");
 
 const DATA = path.join(__dirname, "data");
-const KINDS = ["drift", "dropout"];
-const GRACE = { drift: 40, dropout: 0 };   // first readings after onset that are too small to see yet
+const KINDS = ["drift", "dropout", "noise", "leak"];
+const GRACE = { drift: 40, dropout: 0, noise: 10, leak: 10 };   // first readings after onset that are too small to see yet
 const MAX_FALSE_RATE = 0.001;
 const EPOCHS = 400, RATE = 0.5, L2 = 1e-3;
 
@@ -32,31 +36,49 @@ function loadCsv(file) {
   const name = path.basename(file);
   return {
     name,
-    kind: KINDS.find((k) => name.startsWith(k)) || "normal",
+    kind: ["drift", "dropout", "noise", "spike"].find((k) => name.startsWith(k) || name.includes(`_${k}`)) || "normal",
     names: sensorIdx.map((i) => cols[i]),
     columns: sensorIdx.map((i) => rows.map((r) => (r[i] === "" || r[i] === undefined ? NaN : +r[i]))),
     active: cols.includes("Anomaly_Active") ? get("Anomaly_Active") : new Array(n).fill(0),
+    leak: cols.includes("Real_Leak") ? get("Real_Leak") : new Array(n).fill(0),
     faulty: cols.includes("Faulty_Sensor") ? get("Faulty_Sensor")[0] : 0,
     n,
     baseN: Math.max(20, Math.round(n * 0.15)),
   };
 }
 
+// first reading of the fault this model looks for (-1: none in this file)
+function onsetOf(kind, ds) {
+  if (kind === "leak") return ds.leak.indexOf(1);
+  if (ds.kind !== kind) return -1;
+  // dropout: the first gap (in the leak files the labelled start is the leak, before the first gap)
+  if (kind === "dropout") return ds.columns[ds.faulty - 1].findIndex((v) => !Number.isFinite(v));
+  return ds.active.indexOf(1);
+}
+
 // what the model should say at each reading of each sensor (true / false / null = leave out)
 function label(kind, ds, i, t) {
+  if (kind === "leak") return ds.leak[t] ? (t < onsetOf(kind, ds) + GRACE.leak ? null : true) : false;
   if (ds.kind !== kind || ds.faulty !== i + 1) return false;
-  const onset = ds.active.indexOf(1);
-  if (kind === "drift") {
+  const onset = onsetOf(kind, ds);
+  if (kind === "drift" || kind === "noise") {
     if (!ds.active[t]) return false;
-    return t < onset + GRACE.drift ? null : true;
+    return t < onset + GRACE[kind] ? null : true;
   }
   // dropout: from the first gap on, the sensor is unreliable, also between the gaps
   return t >= onset;
 }
 
+const featureCache = new Map();
+function cachedFeatures(kind, ds) {
+  const key = `${kind}|${ds.name}`;
+  if (!featureCache.has(key)) featureCache.set(key, FaultML.features(kind, ds.columns, ds.baseN));
+  return featureCache.get(key);
+}
+
 function examples(kind, ds) {
   const out = [];
-  FaultML.features(kind, ds.columns, ds.baseN).forEach((fs_, i) => fs_.forEach((f, t) => {
+  cachedFeatures(kind, ds).forEach((fs_, i) => fs_.forEach((f, t) => {
     if (!f || t < ds.baseN) return;
     const y = label(kind, ds, i, t);
     if (y !== null) out.push({ x: FaultML.transform(kind, f), y: y ? 1 : 0 });
@@ -112,19 +134,22 @@ function score(kind, ds, flagged) {
     if (y === null) return;
     if (y) { positives++; if (v) hits++; } else { negatives++; if (v) falseFlags++; }
   }));
-  const onset = ds.active.indexOf(1);
-  const hit = ds.kind === kind ? firstSustained(flagged[ds.faulty - 1], onset) : -1;
-  return { delay: ds.kind === kind ? (hit >= 0 ? hit - onset : "missed") : null, coverage: positives ? hits / positives : null, falseFlags, negatives };
+  const onset = onsetOf(kind, ds);
+  const hit = onset >= 0 ? firstSustained(flagged[kind === "leak" ? 0 : ds.faulty - 1], onset) : -1;
+  return { delay: onset >= 0 ? (hit >= 0 ? hit - onset : "missed") : null, coverage: positives ? hits / positives : null, falseFlags, negatives };
 }
 
 function mlFlags(kind, ds, model) {
-  return FaultML.predict(kind, ds.columns, ds.baseN, model).map((s) => s.map((r) => r.p >= model.threshold));
+  return cachedFeatures(kind, ds).map((s) => s.map((f) => FaultML.probability(kind, model, f) >= model.threshold));
 }
 
 // the rule-based detector without the models, for comparison
 function ruleFlags(kind, ds) {
-  const want = kind === "drift" ? ["Drift high", "Drift low"] : ["No signal"];
-  return Detector.analyse(ds.names, ds.columns, { ml: false }).sensors.map((s) => s.type.map((t) => want.includes(t)));
+  const res = Detector.analyse(ds.names, ds.columns, { ml: false });
+  // the rules only know plant-wide rises (radiation); for a leak, count any plant-wide event
+  if (kind === "leak") { const ev = new Set(res.events); return [res.sensors[0].type.map((_, t) => ev.has(t))]; }
+  const want = { drift: ["Drift high", "Drift low"], dropout: ["No signal"], noise: ["Noisy"] }[kind];
+  return res.sensors.map((s) => s.type.map((t) => want.includes(t)));
 }
 
 // A single missed sample is a data-logger hiccup, not a failing sensor, but none of the recordings
@@ -144,9 +169,21 @@ function withIsolatedBlanks(ds) {
   return { ...ds, name: `${ds.name} (isolated blanks)`, columns };
 }
 
+// The noise recordings only contain ~12x noise, so the model would otherwise put the line at ~2.5x.
+// The rule-based detector calls a sensor noisy from 3x its normal scatter; copies of the files where
+// one healthy sensor's noise grows 2.5x halfway through, labelled normal, teach the model the same line.
+function withMildNoise(ds) {
+  const i = ds.faulty > 0 ? ds.faulty % ds.columns.length : 0;   // a sensor other than the faulty one
+  const col = ds.columns[i], half = Math.floor(ds.n / 2);
+  const smooth = col.map((_, t) => { const w = col.slice(Math.max(0, t - 7), t + 8).filter(Number.isFinite); return w.reduce((a, b) => a + b, 0) / w.length; });
+  const columns = ds.columns.slice();
+  columns[i] = col.map((v, t) => (t >= half && Number.isFinite(v) ? smooth[t] + 2.5 * (v - smooth[t]) : v));
+  return { ...ds, name: `${ds.name} (mild noise)`, columns };
+}
+
 const files = fs.readdirSync(DATA).filter((f) => f.endsWith(".csv")).sort();
 const sets = files.map((f) => loadCsv(path.join(DATA, f)));
-const augmented = sets.filter((ds) => ds.kind !== "dropout").map(withIsolatedBlanks);
+const augmented = [...sets.filter((ds) => ds.kind !== "dropout").map(withIsolatedBlanks), ...sets.map(withMildNoise)];
 const finals = {};
 let report = `# Fault model evaluation\n\nEach file was scored by a model trained on the other files (leave-one-file-out).\n` +
   `- **Detected after**: seconds from the labelled fault start until the faulty sensor stays flagged for 10 readings in a row.\n` +
@@ -164,7 +201,7 @@ for (const kind of KINDS) {
   const lines = [
     `| File | Faulty sensor | ML: detected after | ML: covered | ML: false flags | Rules: detected after | Rules: covered | Rules: false flags |`,
     "|---|---|---|---|---|---|---|---|",
-    ...rows.map(({ ds, ml, rule }) => `| ${ds.name} | ${ds.kind === kind ? ds.faulty : "-"} | ${cell(ml)} | ${pct(ml)} | ${ml.falseFlags} / ${ml.negatives} | ${cell(rule)} | ${pct(rule)} | ${rule.falseFlags} / ${rule.negatives} |`),
+    ...rows.map(({ ds, ml, rule }) => `| ${ds.name} | ${kind === "leak" ? (onsetOf(kind, ds) >= 0 ? "all" : "-") : ds.kind === kind ? ds.faulty : "-"} | ${cell(ml)} | ${pct(ml)} | ${ml.falseFlags} / ${ml.negatives} | ${cell(rule)} | ${pct(rule)} | ${rule.falseFlags} / ${rule.negatives} |`),
   ];
   console.log(`\n${kind} model\n${lines.join("\n")}`);
   finals[kind] = train(kind, [...sets, ...augmented]);
