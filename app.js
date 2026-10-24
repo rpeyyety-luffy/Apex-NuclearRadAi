@@ -57,7 +57,8 @@ function normalizeRows(rawRows) {
     values: sensors.map((sensor) => numeric(row[headerFor.get(sensor)]))
   })).filter((row) => row.values.some(Number.isFinite));
   if (rows.length < 5) throw new Error('At least five rows with numeric sensor readings are required.');
-  return { sensors, rows };
+  const secondsPerReading = indexHeader ? Detector.secondsPerReading(rows.map((row) => row.label), String(indexHeader)) : null;
+  return { sensors, rows, secondsPerReading };
 }
 
 // detector.js status and fault type -> the wording used on this page
@@ -84,7 +85,7 @@ function analyse(data) {
     const s = detection.sensors[sensorIndex];
     const issue = issueFor(s);
     const recommendation = s.advice.length ? s.advice.join(' ') : 'Continue routine monitoring; readings agree with peer channels.';
-    return { sensor, series, peer, baseline, latest, issue, status: s.status, summary: s.summary, recommendation };
+    return { sensor, series, peer, baseline, latest, issue, status: s.status, summary: s.summary, recommendation, maintenance: s.maintenance };
   });
   const active = results.filter((result) => result.issue !== 'Healthy');
   const network = results.filter((result) => Number.isFinite(result.latest)).map((result) => result.latest);
@@ -132,6 +133,19 @@ function renderCore(results = expectedSensors.map((sensor) => ({ sensor, issue: 
   window.dispatchEvent(new CustomEvent('core-results', { detail: results }));
 }
 
+// predicted sensor health and when it should be repaired or replaced (detector.js)
+function maintenanceHtml(m, secondsPerReading) {
+  const tone = m.health >= 80 ? 'var(--mint)' : m.health >= 40 ? 'var(--amber)' : 'var(--red)';
+  const when = (label, readings) => (m.action === 'None' ? '' : `<span>${label}: <b>${Detector.whenText(readings, secondsPerReading)}</b></span>`);
+  const action = m.action === 'Replace' ? 'Replace' : m.action;
+  const dates = m.action === 'Replace' || m.action === 'Inspect' ? '' : when(action, m.serviceIn) + when('Replace', m.replaceIn);
+  return `<div class="health"><div class="health-top"><span>Health</span><b style="color:${tone}">${m.health}/100</b></div>`
+    + `<div class="health-bar"><i style="width:${m.health}%;background:${tone}"></i></div>`
+    + `<p class="health-action"><b>${m.action === 'None' ? 'No maintenance due' : `${action} · ${m.urgency}`}</b></p>`
+    + (dates ? `<div class="health-when">${dates}</div>` : '')
+    + (m.action === 'None' ? '' : `<p class="small" style="margin-top:6px">${m.text}</p>`) + '</div>';
+}
+
 function render(report) {
   clearNotice();
   $('summary').innerHTML = [
@@ -161,7 +175,7 @@ function render(report) {
     const type = result.status === 'Healthy' ? 'ok' : result.status === 'Faulty' ? 'bad' : 'warn';
     const meta = `Latest: ${Number.isFinite(result.latest) ? result.latest.toFixed(2) : 'missing'} · baseline: ${result.baseline.toFixed(2)}`;
     const advice = result.status === 'Healthy' ? '' : `<p style="margin-top:7px">${result.recommendation}</p>`;
-    return `<article class="finding ${type}"><h3>${result.sensor} · ${result.issue}</h3><p>${result.summary}</p>${advice}<p class="small" style="margin-top:9px">${meta}</p></article>`;
+    return `<article class="finding ${type}"><h3>${result.sensor} · ${result.issue}</h3><p>${result.summary}</p>${maintenanceHtml(result.maintenance, report.secondsPerReading)}${advice}<p class="small" style="margin-top:9px">${meta}</p></article>`;
   }).join('');
   $('findings').classList.add('show');
   $('chartsTitle').hidden = false;

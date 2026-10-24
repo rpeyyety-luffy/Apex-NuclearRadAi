@@ -150,7 +150,7 @@ function toTable(workbook, label) {
     const serial = times.every((v) => typeof v === "number" && v > 20000 && v < 80000);
     times = times.map((v) => (serial ? excelTime(v) : v));
   }
-  return { names, columns, times, sheet: sheet.name, rows: body.length };
+  return { names, columns, times, timeName: timeCol >= 0 ? head[timeCol] : "", sheet: sheet.name, rows: body.length };
 }
 
 async function readWorkbook(file) {
@@ -271,10 +271,15 @@ function render() {
   // summary table, worst first
   const order = { Faulty: 0, "At risk": 1, Watch: 2, Healthy: 3 };
   const ranked = [...r.sensors].sort((a, b) => order[a.status] - order[b.status] || b.anomalies - a.anomalies);
-  $("summary").innerHTML = "<tr><th>Sensor</th><th>Status</th><th>Main issue</th><th>Abnormal readings</th><th>Off peers now</th><th>First problem</th><th>What it means</th></tr>"
+  const step = Detector.secondsPerReading(table.times, table.timeName);
+  const due = (m, readings) => (m.action === "None" ? "—" : Detector.whenText(readings, step));
+  $("summary").innerHTML = "<tr><th>Sensor</th><th>Status</th><th>Main issue</th><th>Health</th><th>Maintenance</th><th>Service due</th><th>Replace due</th><th>Abnormal readings</th><th>Off peers now</th><th>First problem</th><th>What it means</th></tr>"
     + ranked.map((s) => `<tr><td><b>${esc(s.name)}</b></td>`
       + `<td><span class="tag" style="background:${STATUS[s.status]}22;color:${STATUS[s.status]}">${s.status}</span></td>`
-      + `<td>${s.fault || "—"}</td><td>${s.anomalies} (${s.anomalyPct.toFixed(1)}%)</td>`
+      + `<td>${s.fault || "—"}</td><td><b>${s.maintenance.health}</b>/100</td>`
+      + `<td>${s.maintenance.action === "None" ? "—" : `${s.maintenance.action} (${s.maintenance.urgency})`}</td>`
+      + `<td>${s.maintenance.action === "Replace" ? "—" : due(s.maintenance, s.maintenance.serviceIn)}</td><td>${due(s.maintenance, s.maintenance.replaceIn)}</td>`
+      + `<td>${s.anomalies} (${s.anomalyPct.toFixed(1)}%)</td>`
       + `<td>${s.devPct >= 0 ? "+" : ""}${s.devPct.toFixed(1)}%</td>`
       + `<td>${s.firstIssue >= 0 ? esc(String(xs[s.firstIssue])) : "—"}</td><td>${esc(s.summary)}</td></tr>`).join("");
 
@@ -285,7 +290,7 @@ function render() {
       <span class="small">${s.anomalies} abnormal readings · trend ${s.devPct >= 0 ? "+" : ""}${s.devPct.toFixed(1)}% vs peers${s.driftProb ? ` · ML drift ${Math.round(100 * s.driftProb[s.driftProb.length - 1])}%` : ""}${s.dropoutProb ? ` · ML dropout ${Math.round(100 * s.dropoutProb[s.dropoutProb.length - 1])}%` : ""}${s.noiseProb ? ` · ML noise ${Math.round(100 * s.noiseProb[s.noiseProb.length - 1])}%` : ""}${s.stuckProb ? ` · ML stuck ${Math.round(100 * s.stuckProb[s.stuckProb.length - 1])}%` : ""}${s.spikeProb ? ` · ML spike ${Math.round(100 * s.spikeProb[s.spikeProb.length - 1])}%` : ""}</span></div>
       <div class="small">${esc(s.note)}</div>
       <div id="chart${i}" class="chart"></div>
-      <div class="advice"><div><div class="eye">Finding</div>${esc(s.summary)}</div>
+      <div class="advice"><div><div class="eye">Finding</div>${esc(s.summary)}<div class="eye" style="margin-top:12px">Sensor health · ${s.maintenance.health}/100</div>${esc(s.maintenance.text)}</div>
       <div><div class="eye">What to do</div>${s.advice.length ? `<ul>${s.advice.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>` : "No action needed."}</div></div>
     </div>`).join("");
 

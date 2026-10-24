@@ -341,6 +341,18 @@
       s.advice = s.fault ? ADVICE[s.fault] : [];
     }
 
+    // ----------------------------------------------------------- sensor health and maintenance timing
+    const spikeStart = (s, t) => s.type[t] === "Spike" && (t === 0 || s.type[t - 1] !== "Spike");
+    for (const s of sensors) {
+      const series = {
+        drift: s.rel.map((v) => (Number.isFinite(v) ? Math.abs(v) : NaN)),
+        noise: s.x.map((_, t) => (Number.isFinite(s.scatter[t]) ? rough(s, t) / peerRough(s, t) : NaN)),
+        dropout: trailingShare(s.x.map((v) => !Number.isFinite(v)), MAINT_WINDOW),
+        spike: trailingShare(s.x.map((_, t) => spikeStart(s, t)), MAINT_WINDOW).map((v) => 100 * v),
+      };
+      s.maintenance = maintenance(s, series, recent);
+    }
+
     // ----------------------------------------------------------- leak: full or partial
     // A leak is reported when the leak model flags it at the end of the file, or when most sensors
     // that agree with each other have fallen together over the last readings (rule backstop).
@@ -399,11 +411,136 @@
     return { sensors, events, leak: leak ? { ...leak, prob: leakProb, readings: leakSpan } : null, verdict, plantVsIdeal, peerMode, window: w, baseN, n, reference, advice: ADVICE };
   }
 
+  // ------------------------------------------------------------------ maintenance prediction
+  // Each fault type has a degradation measure with two limits: SERVICE (repair or recalibrate due) and
+  // REPLACE (the sensor can no longer be trusted). Health = 100 x (1 - how far the measure has gone from
+  // normal towards the replace limit). The readings left until each limit come from extrapolating the
+  // recent trend of the measure in a straight line: a forecast that assumes the fault keeps developing
+  // as it has, not a guarantee. Limits are illustrative values for these recordings, not instrument specs.
+  const MAINT_WINDOW = 100;   // readings used for the dropout and spike rates
+  const MAINT = {
+    drift: { normal: 0, service: 0.02, replace: 0.10, action: "Recalibrate",
+      measure: (v) => `${(100 * v).toFixed(1)}% off its peers`, limit: (v) => `${(100 * v).toFixed(0)}%` },
+    noise: { normal: 1, service: NOISE_RATIO, replace: 10, action: "Repair",
+      measure: (v) => `scatter ${v.toFixed(1)}x normal`, limit: (v) => `${v}x` },
+    dropout: { normal: 0, service: 0.05, replace: 0.5, action: "Repair",
+      measure: (v) => `${(100 * v).toFixed(0)}% of the last ${MAINT_WINDOW} readings missing`, limit: (v) => `${(100 * v).toFixed(0)}% missing` },
+    spike: { normal: 0, service: 1, replace: 5, action: "Repair",
+      measure: (v) => `${v.toFixed(1)} spikes per 100 readings`, limit: (v) => `${v} per 100 readings` },
+  };
+  const NOUN = { Recalibrate: "recalibration", Repair: "repair" };
+  const KIND_OF = { "Drift high": "drift", "Drift low": "drift", Noisy: "noise", "No signal": "dropout", Spike: "spike", Stuck: "stuck" };
+
+  function trailingShare(mask, w) {
+    const out = new Array(mask.length);
+    let sum = 0;
+    for (let t = 0; t < mask.length; t++) {
+      sum += mask[t] ? 1 : 0;
+      if (t >= w) sum -= mask[t - w] ? 1 : 0;
+      out[t] = sum / Math.min(t + 1, w);
+    }
+    return out;
+  }
+
+  // readings until `limit` at the recent rate (0 = already there, Infinity = not getting worse)
+  function readingsTo(values, limit, span, cfg) {
+    const now = median(values.slice(-5));
+    if (!Number.isFinite(now)) return { now, rate: 0, left: Infinity };
+    if (now >= limit) return { now, rate: 0, left: 0 };
+    const rate = slope(values.slice(-span));
+    // a trend must move at least 5% of the normal-to-replace range across the window to count
+    if (!(rate > 0) || rate * span < 0.05 * (cfg.replace - cfg.normal)) return { now, rate, left: Infinity };
+    return { now, rate, left: Math.round((limit - now) / rate) };
+  }
+
+  // the trend is fitted over the fault's history since it was first seen (at least the recent window,
+  // at most 300 readings): a slow drift looks flat over a few dozen readings
+  function trendSpan(s, recent) {
+    const since = s.firstIssue >= 0 ? s.x.length - s.firstIssue : 0;
+    return Math.max(recent, Math.min(since, 300));
+  }
+
+  function maintenance(s, series, recent) {
+    // drift limits can never be tighter than what this sensor can resolve against its peers (s.thr)
+    const cfgFor = (k) => (k === "drift"
+      ? { ...MAINT.drift, service: Math.max(MAINT.drift.service, s.thr), replace: Math.max(MAINT.drift.replace, 3 * s.thr) }
+      : MAINT[k]);
+    const health = (kind, v) => {
+      const c = cfgFor(kind);
+      return Math.round(100 * Math.min(1, Math.max(0, 1 - (v - c.normal) / (c.replace - c.normal))));
+    };
+    const kind = KIND_OF[s.fault] || null;
+    const now = Object.fromEntries(Object.keys(MAINT).map((k) => [k, median(series[k].slice(-5))]));
+    const valueOf = (k) => (Number.isFinite(now[k]) ? now[k] : MAINT[k].normal);
+    if (s.status === "Healthy" || !kind) {
+      // healthy: report how much margin is left, but no maintenance date. Short-term jitter in a healthy
+      // sensor is not a trend; a real trend shows up as "At risk" first.
+      const k = Object.keys(MAINT).sort((a, b) => health(a, valueOf(a)) - health(b, valueOf(b)))[0];
+      return { kind: k, health: health(k, valueOf(k)), value: valueOf(k), action: "None", urgency: "-",
+        serviceIn: Infinity, replaceIn: Infinity, measure: cfgFor(k).measure(valueOf(k)),
+        text: "No maintenance due: it agrees with its peers." };
+    }
+    if (kind === "stuck") {
+      return { kind, health: 0, action: "Replace", urgency: "Immediate", serviceIn: 0, replaceIn: 0,
+        text: "Replace now: the output is frozen, so the sensor no longer measures anything." };
+    }
+    const k = kind;
+    const c = cfgFor(k);
+    const span = trendSpan(s, recent);
+    const svc = readingsTo(series[k], c.service, span, c);
+    const rep = readingsTo(series[k], c.replace, span, c);
+    const value = valueOf(k);
+    const m = { kind: k, health: health(k, value), value, rate: svc.rate, serviceIn: svc.left, replaceIn: rep.left,
+      serviceLimit: c.service, replaceLimit: c.replace, measure: c.measure(value) };
+    const replaceLater = Number.isFinite(rep.left)
+      ? ` At the current rate it reaches the replacement limit (${c.limit(c.replace)}) in about ${rep.left} readings: replace by then if the ${NOUN[c.action]} does not hold.`
+      : ` It is not getting worse, so replacement is not expected on the current trend; replace only if the ${NOUN[c.action]} does not fix it.`;
+    if (rep.left === 0) {
+      Object.assign(m, { action: "Replace", urgency: "Immediate",
+        text: `Replace now: ${m.measure}, beyond the replacement limit (${c.limit(c.replace)}).` });
+    } else if (svc.left === 0) {
+      Object.assign(m, { action: c.action, urgency: "Now", text: `${c.action} now: ${m.measure}, past the service limit (${c.limit(c.service)}).${replaceLater}` });
+    } else if (Number.isFinite(svc.left)) {
+      Object.assign(m, { action: c.action, urgency: "Planned",
+        text: `${c.action} in about ${svc.left} readings: ${m.measure} and rising towards the service limit (${c.limit(c.service)}).` });
+    } else {
+      Object.assign(m, { action: "Inspect", urgency: "Routine",
+        text: `Inspect at the next routine check: ${m.measure}, below the service limit (${c.limit(c.service)}) and not rising.` });
+    }
+    return m;
+  }
+
+  // "about 240 readings (about 4.0 min)" when the time between readings is known
+  function whenText(readings, secondsPerReading) {
+    if (readings === 0) return "now";
+    if (!Number.isFinite(readings)) return "not expected on the current trend";
+    if (!secondsPerReading) return `in about ${readings} readings`;
+    const sec = readings * secondsPerReading;
+    const span = sec < 120 ? `${Math.round(sec)} s` : sec < 7200 ? `${(sec / 60).toFixed(1)} min`
+      : sec < 172800 ? `${(sec / 3600).toFixed(1)} h` : `${(sec / 86400).toFixed(1)} days`;
+    return `in about ${readings} readings (about ${span})`;
+  }
+
+  // seconds between readings from a time column: dates, or numbers in a column named like "Time_s"
+  function secondsPerReading(times, header = "") {
+    if (!times || times.length < 3) return null;
+    let t = times.map((v) => (typeof v === "number" ? v : Date.parse(String(v).replace(" ", "T")) / 1000));
+    if (typeof times[0] === "number" || /^\s*-?\d+(\.\d+)?\s*$/.test(String(times[0]))) {
+      t = times.map(Number);
+      const unit = /(^|_|\s|\()(s|sec|secs|seconds)\)?$/i.test(header) ? 1 : /(min|minutes)\)?$/i.test(header) ? 60
+        : /(h|hr|hours)\)?$/i.test(header) ? 3600 : null;
+      if (!unit) return null;
+      t = t.map((v) => v * unit);
+    }
+    const d = median(t.slice(1).map((v, i) => v - t[i]).filter((x) => Number.isFinite(x) && x > 0));
+    return Number.isFinite(d) ? d : null;
+  }
+
   function fmt(v) {
     return Math.abs(v) >= 10 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2);
   }
 
-  const api = { REFERENCE, TYPES, ADVICE, analyse, profileFrom, sensorId, median, fmt };
+  const api = { REFERENCE, TYPES, ADVICE, MAINT, analyse, profileFrom, sensorId, median, fmt, whenText, secondsPerReading, readingsTo, trendSpan };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Detector = api;
 })(typeof window !== "undefined" ? window : globalThis);

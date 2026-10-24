@@ -5,9 +5,13 @@
       every other sensor is Healthy, and the verdict is a plant event exactly when Real_Leak is set:
       a full leak for realleak_maxdanger.csv (pressure collapses to near zero), a partial leak for
       the realleak<N>_<fault>.csv files (pressure drops and stabilises midway).
+      Every flagged sensor gets a maintenance action; every healthy one gets none; stuck = replace now.
    2. Stress cases built on realleak_maxdanger.csv (all sensors collapse together): a sensor fault
       injected into sensors 1, 3 and 5 in turn must still be found, with the leak still reported
-      as a plant event and the other sensors Healthy. */
+      as a plant event and the other sensors Healthy.
+   3. Maintenance-timing backtest on the drift recordings: cut each file 100 and 150 readings into
+      the fault, forecast when the drift reaches 90% of the level it really reached by the end, and
+      compare with when the full file actually got there. Passes within 25% of the forecast horizon. */
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -44,7 +48,10 @@ function check(label, columns, faulty, expected, leak, leakKind) {
     if (want) {
       if (s.status === "Healthy") problems.push(`${s.name} should be ${want.join("/")} but is Healthy`);
       else if (!want.includes(s.fault)) problems.push(`${s.name} should be ${want.join("/")} but is ${s.status}: ${s.fault}`);
+      else if (s.maintenance.action === "None") problems.push(`${s.name} is ${s.fault} but gets no maintenance action`);
+      else if (s.fault === "Stuck" && s.maintenance.action !== "Replace") problems.push(`${s.name} is stuck but not marked for replacement`);
     } else if (s.status !== "Healthy") problems.push(`${s.name} should be Healthy but is ${s.status}: ${s.fault}`);
+    else if (s.maintenance.action !== "None") problems.push(`${s.name} is healthy but gets "${s.maintenance.action}"`);
   });
   if ((res.verdict.level === "event") !== leak) problems.push(`verdict ${res.verdict.level}, expected ${leak ? "event" : "not event"}`);
   // a full leak collapses to near zero; a partial leak drops and stabilises midway
@@ -83,5 +90,29 @@ for (const [label, expected, inject] of STRESS) {
   }
 }
 
-console.log(`\n${passed}/${passed + failed} passed`);
+// 3. maintenance-timing backtest
+const smooth = (a, w = 15) => a.map((_, t) => Detector.median(a.slice(Math.max(0, t - w + 1), t + 1)));
+const errors = [];
+for (const file of fs.readdirSync(DATA).filter((f) => f.includes("drift")).sort()) {
+  const d = loadCsv(path.join(DATA, file));
+  const active = fs.readFileSync(path.join(DATA, file), "utf8").trim().split(/\r?\n/).slice(1).map((l) => l.split(",").at(-3));
+  const onset = active.indexOf("1"), i = d.faulty - 1;
+  const full = Detector.analyse(NAMES, d.columns);
+  const level = smooth(full.sensors[i].rel.map(Math.abs));
+  const target = 0.9 * level[full.n - 1];
+  for (const after of [100, 150]) {
+    const cut = onset + after;
+    const label = `forecast ${file} cut at ${cut}`;
+    const actual = level.findIndex((v, t) => t >= cut && v >= target);
+    const s = Detector.analyse(NAMES, d.columns.map((c) => c.slice(0, cut))).sensors[i];
+    const span = Detector.trendSpan(s, Math.max(30, Math.round(cut * 0.1)));
+    const left = Detector.readingsTo(s.rel.map(Math.abs), target, span, { normal: 0, replace: 0.1 }).left;
+    const err = cut + left - actual, horizon = actual - cut;
+    errors.push(Math.abs(err));
+    if (Number.isFinite(err) && Math.abs(err) <= 0.25 * horizon) { passed++; console.log(`ok   ${label}: predicted ${cut + left}, actual ${actual} (error ${err} of ${horizon})`); }
+    else { failed++; console.log(`FAIL ${label}: predicted ${cut + left}, actual ${actual} (horizon ${horizon})`); }
+  }
+}
+console.log(`\nforecast error: mean ${(errors.reduce((a, b) => a + b, 0) / errors.length).toFixed(1)} readings, median ${Detector.median(errors)}`);
+console.log(`${passed}/${passed + failed} passed`);
 process.exit(failed ? 1 : 0);
