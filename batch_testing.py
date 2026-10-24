@@ -16,6 +16,7 @@ import nuclearrad as nr
 import evaluation as ev
 import fault_detection as fd
 import fault_response as fr
+import sensor_health as sh
 from dataset_generator import BATCH_SEED_BASE, generate_runs
 
 
@@ -30,6 +31,9 @@ def run_test_case(bundle, run, split="batch"):
     rules = fd.rule_based_run(run.readings, w, bundle["min_flagged"], run.names, bundle.get("min_spike"))
     rec = fr.recommend(det)
     corr = fr.apply_correction(run.readings, det, w)
+    health = sh.assess_health(det, run.readings, w)
+    scores = sh.health_timeline(det)
+    expected_actions = sh.expected_actions(run)
 
     expected_fault = bool(run.fault_sensors)
     expected_process = "Process change" in run.expected_category
@@ -59,7 +63,20 @@ def run_test_case(bundle, run, split="batch"):
     elif cm["improvement_pct"] is None:
         status = "gap estimate only (no raw reading to compare)" if cm["gap_samples"] else "applied (no comparable samples)"
     else:
-        status = "applied, error reduced" if cm["improvement_pct"] > 0 else "applied, error increased"
+        imp = cm["improvement_pct"]
+        status = ("applied, error reduced" if imp > 0 else "applied, error increased" if imp < 0
+                  else "applied, error unchanged (only gaps were estimated)" if cm["gap_samples"]
+                  else "applied, error unchanged")
+
+    # maintenance: the action for every truly faulty sensor, and unneeded work on healthy ones
+    fixes = {h["sensor"]: h["action"] for h in health if h["action"] not in ("NONE", "MONITOR")}
+    action_correct = (all(fixes.get(i) == a for i, a in expected_actions.items())
+                      if expected_actions else None)
+    unneeded = [run.names[i] for i in fixes if i not in expected_actions]
+    in_window = slice(cfg.fault_start, cfg.fault_end)
+    healthy_idx = [i for i in range(run.readings.shape[1]) if i not in expected]
+    faulty_health = float(scores[in_window][:, sorted(expected)].min()) if expected else None
+    healthy_health = float(scores[w:][:, healthy_idx].min()) if healthy_idx else None
 
     response_ok = (det["fault_present"] == expected_fault and det["process_change"] == expected_process
                    and (not expected_fault or bool(predicted & expected)))
@@ -74,6 +91,10 @@ def run_test_case(bundle, run, split="batch"):
         false_positive=outcome == "FP", missed_detection=outcome == "FN",
         detection_delay_samples=delay, model_confidence_uncalibrated=det["primary_confidence"],
         recommended_response=" | ".join(r["action"] for r in rec["items"]), response_appropriate=response_ok,
+        expected_maintenance=";".join(f"{run.names[i]}:{a}" for i, a in sorted(expected_actions.items())) or "none",
+        predicted_maintenance=";".join(f"{run.names[i]}:{a}" for i, a in sorted(fixes.items())) or "none",
+        maintenance_correct=action_correct, unneeded_maintenance=";".join(unneeded) or "none",
+        min_health_faulty_sensor=faulty_health, min_health_healthy_sensors=healthy_health,
         correction_status=status, raw_mae=cm["raw_mae"], corrected_mae=cm["corrected_mae"],
         correction_improvement_pct=cm["improvement_pct"], compared_samples=cm["n_compared"],
         gap_samples=cm["gap_samples"], gap_coverage=cm["gap_coverage"], gap_estimate_mae=cm["gap_estimate_mae"],
@@ -114,6 +135,11 @@ def evaluate_runs(bundle, runs, split):
     )
 
 
+def _mean(col):
+    col = pd.to_numeric(col, errors="coerce").dropna()
+    return float(col.mean()) if len(col) else None
+
+
 def summarise(table):
     """Run-level metrics from a results table (one row per run)."""
     if table.empty:
@@ -139,6 +165,11 @@ def summarise(table):
         mean_corrected_mae=None if pooled_corr is None or np.isnan(pooled_corr) else float(pooled_corr),
         mean_improvement_pct=ev.improvement_pct(pooled_raw, pooled_corr) if pooled_raw is not None else None,
         correction_status_counts=table["correction_status"].value_counts().to_dict(),
+        maintenance_accuracy=(float(table["maintenance_correct"].dropna().astype(bool).mean())
+                              if table["maintenance_correct"].notna().any() else None),
+        runs_with_unneeded_maintenance=int((table["unneeded_maintenance"] != "none").sum()),
+        mean_min_health_faulty=_mean(table["min_health_faulty_sensor"]),
+        mean_min_health_healthy=_mean(table["min_health_healthy_sensors"]),
     )
 
 
@@ -156,6 +187,8 @@ def by_category(table):
         "mean_raw_mae": g["raw_mae"].mean(),
         "mean_corrected_mae": g["corrected_mae"].mean(),
         "rule_category_accuracy": g["rule_category_correct"].mean(),
+        "maintenance_accuracy": g["maintenance_correct"].apply(
+            lambda c: c.dropna().astype(bool).mean() if c.notna().any() else np.nan),
     })
     out["improvement_pct"] = [ev.improvement_pct(r, c) if np.isfinite(r) and np.isfinite(c) else None
                               for r, c in zip(out["mean_raw_mae"], out["mean_corrected_mae"])]
@@ -194,6 +227,9 @@ def main():
     print(f"mean detection delay {ev.fmt(s['mean_detection_delay'], 1)} samples; "
           f"MAE raw {ev.fmt(s['mean_raw_mae'])} -> corrected {ev.fmt(s['mean_corrected_mae'])} "
           f"({ev.fmt(s['mean_improvement_pct'], 1)}%)")
+    print(f"maintenance action correct for {ev.fmt(s['maintenance_accuracy'])} of fault runs; "
+          f"{s['runs_with_unneeded_maintenance']} runs suggested work on a healthy sensor; lowest health score "
+          f"{ev.fmt(s['mean_min_health_faulty'], 1)} (faulty) vs {ev.fmt(s['mean_min_health_healthy'], 1)} (healthy)")
 
 
 if __name__ == "__main__":

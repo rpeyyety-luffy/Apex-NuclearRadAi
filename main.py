@@ -16,6 +16,7 @@ import fault_detection as fd
 import fault_response as fr
 import model_training
 import nuclearrad as nr
+import sensor_health as sh
 
 warnings.filterwarnings("ignore")
 st.set_page_config(page_title="NuclearRad | Core Monitor", page_icon="☢", layout="wide")
@@ -441,6 +442,24 @@ with tabs[3]:
         st.markdown(f'<div class="section-label">Per-sample class votes · {focus}</div>', unsafe_allow_html=True)
         st.plotly_chart(charts.probability_figure(det, k, nr.CLASSES), width="stretch")
 
+        st.markdown(f'<div class="section-label">Sensor health at sample {t_now}</div>', unsafe_allow_html=True)
+        health = sh.assess_health(det, x, W, t=t_now)
+        st.dataframe(pd.DataFrame([{
+            "sensor": h["name"], "health score": h["health_score"], "condition": h["condition"],
+            "predicted fault": h["fault"], "maintenance": h["action"], "urgency": h["urgency"],
+            "severity": ", ".join(f"{key} {val:.2f}" if isinstance(val, float) else f"{key} {val}"
+                                  for key, val in h["severity"].items()) or "-",
+        } for h in health]), width="stretch", hide_index=True,
+            column_config={"health score": st.column_config.ProgressColumn(min_value=0, max_value=100,
+                                                                           format="%.0f")})
+        st.plotly_chart(charts.health_figure(sh.health_timeline(det), run.names, t_now,
+                                             sh.HEALTHY_SCORE, sh.FAULTY_SCORE), width="stretch")
+        st.caption(f"Health score = 100 × (1 − mean model probability of an instrument fault over the last "
+                   f"{sh.HEALTH_WINDOW} samples). Like the vote share it is uncalibrated. Condition: Healthy "
+                   f"≥ {sh.HEALTHY_SCORE}; Watch = below that but not confirmed; a confirmed fault is Degraded, "
+                   f"Faulty (< {sh.FAULTY_SCORE}) or Failed (stuck, or signal lost). Move the time slider in the "
+                   "sidebar to see how health changes.")
+
 # ------------------------------------------------------------------ E. fault-tolerance response
 with tabs[4]:
     st.markdown('<div class="section-label">Recommended response and simulated correction</div>',
@@ -462,6 +481,24 @@ with tabs[4]:
             st.markdown(f"**Detected:** {rec['category']} · sensors: {rec['sensors']}")
             for item in rec["items"]:
                 st.markdown(f"- **{item['category']} → {item['action']}.** {item['text']}")
+
+            st.markdown('<div class="section-label">Suggested maintenance (simulated work orders)</div>',
+                        unsafe_allow_html=True)
+            orders = [h for h in sh.assess_health(det, x, W, t=t_now) if h["action"] != "NONE"]
+            if not orders:
+                st.success(f"No maintenance needed at sample {t_now}: every sensor agrees with its peers.")
+            for h in orders:
+                text = (f"**{h['name']} → {h['action']}** ({h['urgency']}) · condition {h['condition']}, "
+                        f"health {h['health_score']:.0f}/100. {h['reason']}")
+                box = {"REPLACE": st.error, "REPAIR": st.warning}.get(h["action"], st.info)
+                box(text)
+            with st.expander("How the maintenance action is chosen"):
+                for fault, rule in sh.MAINTENANCE.items():
+                    st.markdown(f"- **{fault}:** {rule}")
+                st.caption("The model predicts the fault type and health score; the action follows from that "
+                           "type and the severity measured in the readings. Limits are illustrative values for "
+                           "this simulator, not limits of any real instrument.")
+
             st.markdown(f"**Correction method:** {corr['method']}")
             for warning in corr["warnings"]:
                 st.warning(warning)
@@ -517,6 +554,12 @@ with tabs[5]:
         b.metric("Mean detection delay", ev.fmt(s["mean_detection_delay"], 1, suffix=" samples"))
         c.metric("Mean MAE raw → corrected", f"{ev.fmt(s['mean_raw_mae'], 2)} → {ev.fmt(s['mean_corrected_mae'], 2)}")
         d.metric("Correction improvement", ev.fmt(s["mean_improvement_pct"], 1, suffix="%"))
+        a, b, c, _ = st.columns(4)
+        a.metric("Maintenance action correct", ev.fmt(s.get("maintenance_accuracy")), "share of fault runs",
+                 delta_color="off")
+        b.metric("Runs with work on a healthy sensor", s.get("runs_with_unneeded_maintenance", "N/A"))
+        c.metric("Lowest health · faulty vs healthy sensors",
+                 f"{ev.fmt(s.get('mean_min_health_faulty'), 1)} vs {ev.fmt(s.get('mean_min_health_healthy'), 1)}")
 
     st.markdown("#### Test split · observation-level confusion matrix (rows = actual, columns = predicted)")
     conf = meta["test"]["observation_confusion"]
@@ -561,6 +604,9 @@ with tabs[6]:
         c.metric("Category accuracy · ML vs rules",
                  f"{ev.fmt(s['category_accuracy'], 2)} vs {ev.fmt(s['rule_category_accuracy'], 2)}")
         d.metric("Missed faults / false alarms", f"{s['missed_faults']} / {s['false_alarms']}")
+        a, b, _, _ = st.columns(4)
+        a.metric("Maintenance action correct", ev.fmt(s["maintenance_accuracy"], 2))
+        b.metric("Runs with work on a healthy sensor", s["runs_with_unneeded_maintenance"])
         st.markdown("#### By expected category")
         st.dataframe(bt.by_category(batch["table"]), width="stretch", hide_index=True)
         st.markdown("#### Every run")

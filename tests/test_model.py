@@ -107,3 +107,57 @@ def test_rule_adapter_does_not_read_not_a_leak_as_a_leak():
     rules = fd.rule_based_run(run.readings, run.config.warmup, 11)
     assert not rules["process_change"]
     assert rules["category"] == "Drift"
+
+
+import sensor_health as sh  # noqa: E402
+
+
+def _det_from(bundle, scenario, **kw):
+    run = nr.simulate(nr.ScenarioConfig(scenario=scenario, **kw))
+    return run, fd.predict_run(bundle, run.readings, run.config.warmup, run.names)
+
+
+def test_health_scores_are_bounded_and_low_for_the_faulty_sensor(small_bundle):
+    run, det = _det_from(small_bundle, "Stuck", seed=21, fault_sensor=2)
+    scores = sh.health_timeline(det)
+    assert scores.shape == run.readings.shape
+    assert np.all((scores >= 0) & (scores <= 100))
+    assert scores[-1, 2] < scores[-1, [0, 1, 3, 4]].min()
+
+
+def test_health_never_looks_past_t(small_bundle):
+    run, det = _det_from(small_bundle, "Drift (upward)", seed=4)
+    scores = sh.health_timeline(det)
+    altered = dict(det, proba=det["proba"].copy())
+    altered["proba"][150:] = 0
+    np.testing.assert_array_equal(scores[:150], sh.health_timeline(altered)[:150])
+
+
+def test_healthy_sensors_need_no_maintenance(small_bundle):
+    run, det = _det_from(small_bundle, "Normal", seed=5)
+    assert all(h["action"] in ("NONE", "MONITOR") for h in sh.assess_health(det, run.readings, 40))
+
+
+def test_maintenance_table():
+    assert sh.maintenance_action("Stuck", {})[0] == "REPLACE"
+    assert sh.maintenance_action("Dropout", {"recent_missing_share": 0.8})[:2] == ("REPAIR", "Immediate")
+    assert sh.maintenance_action("Drift", {"offset": 0.1})[0] == "RECALIBRATE"
+    assert sh.maintenance_action("Drift", {"offset": 0.4})[0] == "REPLACE"
+    assert sh.maintenance_action("Noise", {"noise_ratio": 4})[0] == "REPAIR"
+    assert sh.maintenance_action("Noise", {"noise_ratio": 12})[0] == "REPLACE"
+    assert sh.maintenance_action("Spike", {"spike_events": 1})[0] == "INSPECT"
+    assert sh.maintenance_action("Spike", {"spike_events": 5})[0] == "REPAIR"
+
+
+def test_expected_actions_come_from_ground_truth():
+    big = nr.simulate(nr.ScenarioConfig(scenario="Drift (upward)", seed=1, magnitude=0.5))
+    small = nr.simulate(nr.ScenarioConfig(scenario="Drift (upward)", seed=1, magnitude=0.1))
+    assert sh.expected_actions(big) == {big.config.fault_sensor: "REPLACE"}
+    assert sh.expected_actions(small) == {small.config.fault_sensor: "RECALIBRATE"}
+    assert sh.expected_actions(nr.simulate(nr.ScenarioConfig(scenario="Real leak", seed=1))) == {}
+
+
+def test_drifting_sensor_is_recalibrated_or_replaced(small_bundle):
+    run, det = _det_from(small_bundle, "Drift (upward)", seed=9, fault_sensor=1, magnitude=0.5)
+    h = sh.assess_health(det, run.readings, 40)[1]
+    assert h["fault"] == "Drift" and h["action"] == "REPLACE" and h["severity"]["offset"] >= sh.DRIFT_REPLACE

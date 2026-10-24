@@ -39,8 +39,8 @@ saved (for example after the features or scikit-learn version change), it is tra
 | A · Overview | Reactor schematic, sensor cards and status from the original rule-based monitor |
 | B · Scenario simulator | Choose scenario, seed, noise, sensor, start, duration and magnitude; **Generate scenario**; download the labelled run |
 | C · Sensor monitoring | Peer comparison, trust over time and per-sensor timelines (rule-based monitor) |
-| D · Model prediction | **Predict**: fault present, category, affected sensor, uncalibrated vote share; ML vs rule-based detector |
-| E · Fault-tolerance response | **Simulate response**: recommended action and a peer-based correction with raw vs corrected MAE |
+| D · Model prediction | **Predict**: fault present, category, affected sensor, uncalibrated vote share; ML vs rule-based detector; health score of every sensor over time |
+| E · Fault-tolerance response | **Simulate response**: recommended action, suggested maintenance per faulty sensor, and a peer-based correction with raw vs corrected MAE |
 | F · Evaluation | Validation and held-out test metrics, confusion matrix, per-class report |
 | G · Automated testing | **Run batch test** on fresh seeds; results table and CSV download |
 
@@ -54,8 +54,29 @@ saved (for example after the features or scikit-learn version change), it is tra
 | `model_training.py` | Random Forest; thresholds tuned on validation; test split evaluated once; save / load |
 | `fault_detection.py` | Per-sample classification and run-level verdict; same aggregation applied to the rule-based detector |
 | `fault_response.py` | Recommended responses and the simulated peer-based correction |
+| `sensor_health.py` | Health score and condition per sensor, and a suggested maintenance action (replace, repair, recalibrate, inspect) |
 | `evaluation.py` | Metric formulas (N/A where a denominator is zero) |
 | `batch_testing.py` | Batch evaluation and CSV export (`results/batch_results.csv`) |
+
+### Sensor health and maintenance
+
+The model gives each sensor a **health score** from 0 to 100 at every sample: 100 × (1 − the mean
+model probability of an instrument fault over the last 20 samples). Like the vote share, it is not
+calibrated. Each sensor gets a condition: Healthy, Watch (not confirmed yet), Degraded, Faulty or
+Failed (stuck, or signal lost). A confirmed fault gets a suggested maintenance action, chosen from
+the fault type the model predicted and the severity measured in the readings:
+
+| Predicted fault | Suggested action |
+|---|---|
+| Stuck | REPLACE (immediate) |
+| Dropout | REPAIR cable, connector, power or logger (immediate when most recent readings are missing) |
+| Drift | RECALIBRATE below a 30% offset from the peers; REPLACE at or above it |
+| Noise | REPAIR shielding, grounding or supply below 8× normal scatter; REPLACE above it |
+| Spike | INSPECT connectors for fewer than 4 spike events; REPAIR from 4 on |
+
+These limits are illustrative values for this simulator, not limits of any real instrument. The
+batch test checks each suggestion against the action the simulation's ground truth calls for
+(`maintenance_correct` in the CSV) and counts runs where work was suggested on a healthy sensor.
 
 Scenarios: Normal, Spike (positive / negative), Drift (upward / downward), Stuck, Noise, Dropout,
 Two faulty sensors, Real leak (a real plant-wide change, *not* a sensor fault) and Real leak + Drift.

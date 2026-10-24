@@ -1,7 +1,7 @@
 {
   "version": "rf-features1-sim2-agg2-sklearn1.9.1",
-  "trained_at": "2026-10-24T19:31:18+00:00",
-  "training_seconds": 17.0,
+  "trained_at": "2026-10-24T19:51:05+00:00",
+  "training_seconds": 19.5,
   "n_estimators": 150,
   "random_state": 0,
   "runs_per_scenario": {
@@ -562,11 +562,16 @@
       "mean_improvement_pct": 83.5054911286421,
       "correction_status_counts": {
         "applied, error reduced": 31,
-        "applied, error increased": 5,
         "not needed": 4,
+        "applied, error unchanged (only gaps were estimated)": 4,
         "not needed (process change, not corrected)": 3,
+        "applied, error increased": 1,
         "applied to a healthy sensor (false alarm)": 1
-      }
+      },
+      "maintenance_accuracy": 0.9166666666666666,
+      "runs_with_unneeded_maintenance": 2,
+      "mean_min_health_faulty": 18.926413509402508,
+      "mean_min_health_healthy": 89.38134877071292
     }
   },
   "test": {
@@ -633,10 +638,15 @@
       "mean_improvement_pct": 83.93580251673737,
       "correction_status_counts": {
         "applied, error reduced": 38,
-        "applied, error increased": 7,
         "not needed": 5,
-        "not needed (process change, not corrected)": 5
-      }
+        "applied, error unchanged (only gaps were estimated)": 5,
+        "not needed (process change, not corrected)": 5,
+        "applied, error increased": 2
+      },
+      "maintenance_accuracy": 0.9333333333333333,
+      "runs_with_unneeded_maintenance": 1,
+      "mean_min_health_faulty": 19.868708608889865,
+      "mean_min_health_healthy": 90.4274683390982
     },
     "observation_confusion": {
       "actual": [

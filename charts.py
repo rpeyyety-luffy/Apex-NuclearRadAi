@@ -115,3 +115,19 @@ def correction_figure(run, correction, sensor, show_truth=True):
         figure.add_trace(go.Scatter(x=gaps, y=np.full(gaps.size, np.nanmin(x)), name="Estimate unavailable",
                                     mode="markers", marker=dict(color="#f3b969", symbol="line-ns-open", size=10)))
     return _dark(figure, 360)
+
+
+def health_figure(scores, names, t_now=None, healthy=80, faulty=50):
+    """Model-based health score (0-100) of every sensor over time."""
+    t = np.arange(len(scores))
+    figure = go.Figure()
+    for i, name in enumerate(names):
+        figure.add_trace(go.Scatter(x=t, y=scores[:, i], name=name, mode="lines",
+                                    line=dict(color=SENSOR_COLORS[i % len(SENSOR_COLORS)], width=2)))
+    figure.add_hrect(y0=healthy, y1=100, fillcolor="#8ee2bd", opacity=0.06, line_width=0)
+    figure.add_hrect(y0=0, y1=faulty, fillcolor="#ff746c", opacity=0.06, line_width=0)
+    if t_now is not None:
+        figure.add_vline(x=t_now, line_color="#87958f")
+    figure = _dark(figure, 300, y_title="Health score (0-100)")
+    figure.update_yaxes(range=[0, 102])
+    return figure

@@ -180,7 +180,8 @@ def print_report(bundle):
               f"detect acc {ev.fmt(r['accuracy'])} rec {ev.fmt(r['recall'])} FPR {ev.fmt(r['false_positive_rate'])}, "
               f"category acc {ev.fmt(s['category_accuracy'])} (rules {ev.fmt(s['rule_category_accuracy'])}), "
               f"delay {ev.fmt(s['mean_detection_delay'], 1)} samples, MAE {ev.fmt(s['mean_raw_mae'])} -> "
-              f"{ev.fmt(s['mean_corrected_mae'])}")
+              f"{ev.fmt(s['mean_corrected_mae'])}, maintenance correct {ev.fmt(s['maintenance_accuracy'])}, "
+              f"unneeded maintenance in {s['runs_with_unneeded_maintenance']} runs")
 
 
 if __name__ == "__main__":
