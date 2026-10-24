@@ -198,6 +198,16 @@
       const peers = peerMode ? median(pool.filter((o) => o !== s).map((o) => o.norm[t])) : 1;
       return s.norm[t] / (Number.isFinite(peers) ? peers : 1) - 1;
     };
+    // drift: the machine-learned model (driftml.js) catches drift early; the trend rule stays as a
+    // backstop for small shifts on very noisy sensors, which the training data did not cover
+    const DML = typeof DriftML !== "undefined" ? DriftML : typeof require === "function" ? require("./driftml.js") : null;
+    const useML = opts.drift !== "rules" && peerMode && DML && DML.MODEL;
+    const ml = useML ? DML.predict(columns, baseN) : null;
+    sensors.forEach((s, i) => { s.driftProb = ml ? ml[i].map((r) => r.p) : null; });
+    const drift = (s, i, t) => {
+      if (ml && ml[i][t].p >= DML.MODEL.threshold) return ml[i][t].direction > 0 ? "Drift high" : "Drift low";
+      return s.rel[t] > s.thr ? "Drift high" : s.rel[t] < -s.thr ? "Drift low" : null;
+    };
     for (const s of sensors) s.rel = new Array(n);
     for (let t = 0; t < n; t++) {
       // two passes: sensors that look faulty at this moment are left out of everyone else's peer group
@@ -210,18 +220,17 @@
       const high = live.filter((s) => s.norm[t] - 1 > Math.max(EVENT_RISE, s.thr) && Math.abs(s.rel[t]) <= s.thr);
       const event = live.length >= 3 && high.length >= EVENT_SHARE * live.length;
       if (event) events.push(t);
-      for (const s of sensors) {
+      sensors.forEach((s, i) => {
         let type;
         if (!Number.isFinite(s.x[t])) type = "No signal";
         else if (s.stuck[t]) type = "Stuck";
         else if (noisy(s, t)) type = "Noisy";
         else if (Math.abs(s.x[t] - s.level[t]) > SPIKE_SIGMA * s.sd * counting(s, t)) type = "Spike";
-        else if (s.rel[t] > s.thr) type = "Drift high";
-        else if (s.rel[t] < -s.thr) type = "Drift low";
+        else if (drift(s, i, t)) type = drift(s, i, t);
         else if (event && high.includes(s)) type = "Real rise";
         else type = "Normal";
         (s.type = s.type || new Array(n))[t] = type;
-      }
+      });
     }
 
     // ----------------------------------------------------------- per-sensor verdict

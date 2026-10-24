@@ -6,6 +6,7 @@
 <title>NuclearRad | Fault Detector</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script src="driftml.js"></script>
 <script src="detector.js"></script>
 <style>
 :root{--bg:#0b1211;--panel:#101a18;--line:#294039;--ink:#e8eee9;--muted:#9aa9a4;--mint:#8ee2bd;--amber:#f3b969;--red:#ff746c;--blue:#7cb3ff}
@@ -78,7 +79,7 @@ footer{margin-top:34px;color:var(--muted);font-size:12px}
       <div class="eye">Ideal reference</div>
       <div id="refName" style="margin:6px 0 2px;font-weight:600"></div>
       <div class="refs" id="refChips"></div>
-      <div class="small">Sensors are matched by number (RAD 1, RAD-01, Sensor 1…). A sensor whose normal level is far from the ideal is compared with its own first readings instead.</div>
+      <div class="small">Sensors are matched by number (RAD 1, RAD-01, Sensor 1…). A sensor whose normal level is far from the ideal is compared with its own first readings instead. Drift is recognised by a machine-learning model trained on labelled drift recordings.</div>
       <div class="btns">
         <button class="primary" id="demo">Try a demo</button>
         <button id="example">Download example file</button>
@@ -102,7 +103,7 @@ footer{margin-top:34px;color:var(--muted);font-size:12px}
     <div class="btns"><button id="csv">Download results (CSV)</button></div>
 
     <h2>Sensor readings</h2>
-    <div class="sub">Grey line: raw readings · green line: trend · shaded band: ideal range · markers: abnormal readings.</div>
+    <div class="sub">Grey line: raw readings · green line: trend · shaded band: ideal range · dotted amber line: ML drift probability · markers: abnormal readings.</div>
     <div id="sensors"></div>
   </section>
 
@@ -280,7 +281,7 @@ function render() {
   const shapes = eventShapes(xs);
   $("sensors").innerHTML = r.sensors.map((s, i) => `<div class="box sensor">
       <div class="sensor-head"><h3>${esc(s.name)} <span class="tag" style="background:${STATUS[s.status]}22;color:${STATUS[s.status]}">${s.status}</span></h3>
-      <span class="small">${s.anomalies} abnormal readings · trend ${s.devPct >= 0 ? "+" : ""}${s.devPct.toFixed(1)}% vs peers</span></div>
+      <span class="small">${s.anomalies} abnormal readings · trend ${s.devPct >= 0 ? "+" : ""}${s.devPct.toFixed(1)}% vs peers${s.driftProb ? ` · ML drift probability now ${Math.round(100 * s.driftProb[s.driftProb.length - 1])}%` : ""}</span></div>
       <div class="small">${esc(s.note)}</div>
       <div id="chart${i}" class="chart"></div>
       <div class="advice"><div><div class="eye">Finding</div>${esc(s.summary)}</div>
@@ -307,7 +308,16 @@ function render() {
         hovertemplate: `%{x}<br>${t}<extra></extra>`,
       });
     }
-    Plotly.newPlot(`chart${i}`, traces, plotLayout({ shapes, yaxis: { gridcolor: "#22332e", zeroline: false, title: { text: reference.units && s.mode === "reference" ? reference.units : "Reading" } } }), plotConfig);
+    if (s.driftProb) {
+      traces.push({ x: xs, y: s.driftProb.map((p) => Math.round(1000 * p) / 10), yaxis: "y2", mode: "lines", name: "ML drift probability",
+        line: { color: "#f3b969", width: 1.5, dash: "dot" }, hovertemplate: "%{x}<br>%{y}%<extra>ML drift probability</extra>" });
+    }
+    Plotly.newPlot(`chart${i}`, traces, plotLayout({
+      shapes,
+      margin: { l: 56, r: s.driftProb ? 52 : 14, t: 14, b: 40 },
+      yaxis: { gridcolor: "#22332e", zeroline: false, title: { text: reference.units && s.mode === "reference" ? reference.units : "Reading" } },
+      yaxis2: { overlaying: "y", side: "right", range: [0, 105], showgrid: false, zeroline: false, title: { text: "Drift %" }, visible: !!s.driftProb },
+    }), plotConfig);
   });
 
   $("results").scrollIntoView({ behavior: "smooth", block: "start" });
