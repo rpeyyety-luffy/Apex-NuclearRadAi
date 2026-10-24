@@ -2,12 +2,82 @@
 
 NuclearRad AI monitoring console — a Streamlit training simulation of a five-sensor radiation watch.
 
-## Run locally
+## Run locally (Python prototype)
 
-```bash
+NuclearRad AI is a **research and training prototype on synthetic data**. It is not a
+safety-certified system, has not been validated on real plant instruments, and never controls
+equipment. All metrics it shows come from its own simulations.
+
+Windows Command Prompt (Python 3.10 or newer):
+
+```bat
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
+python model_training.py
 streamlit run main.py
 ```
+
+Other commands (same window, with the virtual environment active):
+
+```bat
+python -m pytest
+python batch_testing.py --runs-per-scenario 5
+python model_training.py --retrain
+```
+
+On macOS / Linux use `source .venv/bin/activate` instead of `.venv\Scripts\activate`.
+
+`python model_training.py` trains the model once (about 30 seconds) and saves it in `models/`;
+the dashboard and the batch script load that file instead of retraining. If no compatible model is
+saved (for example after the features or scikit-learn version change), it is trained automatically.
+
+### Dashboard tabs (`main.py`)
+
+| Tab | What it does |
+|---|---|
+| A · Overview | Reactor schematic, sensor cards and status from the original rule-based monitor |
+| B · Scenario simulator | Choose scenario, seed, noise, sensor, start, duration and magnitude; **Generate scenario**; download the labelled run |
+| C · Sensor monitoring | Peer comparison, trust over time and per-sensor timelines (rule-based monitor) |
+| D · Model prediction | **Predict**: fault present, category, affected sensor, uncalibrated vote share; ML vs rule-based detector |
+| E · Fault-tolerance response | **Simulate response**: recommended action and a peer-based correction with raw vs corrected MAE |
+| F · Evaluation | Validation and held-out test metrics, confusion matrix, per-class report |
+| G · Automated testing | **Run batch test** on fresh seeds; results table and CSV download |
+
+### Pipeline
+
+| File | Role |
+|---|---|
+| `nuclearrad.py` | Original demo (`generate`, `assess`, `forecast`, `summarise`) plus the configurable simulator (`ScenarioConfig`, `simulate`) |
+| `feature_engineering.py` | 15 causal per-sensor features (past and present readings only) |
+| `dataset_generator.py` | Labelled runs; train / validation / test split **by run**, from disjoint seed ranges |
+| `model_training.py` | Random Forest; thresholds tuned on validation; test split evaluated once; save / load |
+| `fault_detection.py` | Per-sample classification and run-level verdict; same aggregation applied to the rule-based detector |
+| `fault_response.py` | Recommended responses and the simulated peer-based correction |
+| `evaluation.py` | Metric formulas (N/A where a denominator is zero) |
+| `batch_testing.py` | Batch evaluation and CSV export (`results/batch_results.csv`) |
+
+Scenarios: Normal, Spike (positive / negative), Drift (upward / downward), Stuck, Noise, Dropout,
+Two faulty sensors, Real leak (a real plant-wide change, *not* a sensor fault) and Real leak + Drift.
+
+Design rules the code follows:
+
+- The healthy reference ("truth") is generated separately from the readings and is used only for
+  labels and evaluation, never as a model input or by the correction.
+- Features at sample *t* use readings up to *t* only (a test checks that changing future readings
+  does not change past features or predictions).
+- The correction never uses a sensor as a reference after it has been detected as faulty; with
+  fewer than two trusted peers it marks the estimate unavailable and keeps the raw reading.
+- A real leak is reported and escalated, never "corrected".
+- Model confidence is the Random Forest vote share. It is **not calibrated**.
+
+Metrics: accuracy = (TP+TN)/(TP+TN+FP+FN), precision = TP/(TP+FP), recall = TP/(TP+FN),
+specificity = TN/(TN+FP), FPR = FP/(FP+TN), MAE = mean |reference − estimate|,
+improvement = (MAE_raw − MAE_corrected)/MAE_raw × 100 (N/A when MAE_raw is 0), detection delay =
+first detection − fault start in samples (missed detections are counted, not given a delay).
+Positive class = an instrument fault; Normal and Real leak runs are negatives.
+
+The single-page sensor view still runs with `streamlit run sensor_charts.py`.
 
 ## Deploy on Vercel
 

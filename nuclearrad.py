@@ -285,5 +285,269 @@ def summarise(res, truth, k=FAULT_SENSOR):
                 err_before=rms(x), err_after=rms(res["corrected"]))
 
 
-def load_or_train():
-    return None
+def load_or_train(retrain=False):
+    """Load the trained fault model, training it first if no compatible model is saved.
+
+    Previously this returned None. The model lives in model_training.py; it is imported here
+    (not at the top) because model_training itself imports this module.
+    """
+    import model_training
+    return model_training.load_or_train(retrain=retrain)
+
+
+# ===================================================== 5. configurable simulator
+# The functions above keep the original fixed demo (RAD-03 breaks at sample 80). The simulator
+# below adds what the machine-learning pipeline needs: every fault parameter is configurable,
+# the healthy reference ("truth") is kept apart from the observed readings, and every sample of
+# every sensor carries a ground-truth label. Values are illustrative normalized units, not
+# validated physical limits of a real facility.
+from dataclasses import asdict, dataclass, field
+import hashlib
+
+BASELINES = (100.0, 102.0, 98.0, 101.0, 99.0)   # healthy level of each sensor (normalized units)
+
+# fault categories a sensor-level observation can have. "Process change" is NOT an instrument fault:
+# the plant itself changed and the sensors report it correctly.
+CLASSES = ["Normal", "Spike", "Drift", "Stuck", "Noise", "Dropout", "Process change"]
+INSTRUMENT_FAULTS = ["Spike", "Drift", "Stuck", "Noise", "Dropout"]
+
+# scenario -> run-level category the system should report for it
+SIM_SCENARIOS = {
+    "Normal": "Normal",
+    "Spike (positive)": "Spike",
+    "Spike (negative)": "Spike",
+    "Drift (upward)": "Drift",
+    "Drift (downward)": "Drift",
+    "Stuck": "Stuck",
+    "Noise": "Noise",
+    "Dropout": "Dropout",
+    "Two faulty sensors": "Multiple faults",
+    "Real leak": "Process change",
+    "Real leak + Drift": "Process change + Drift",
+}
+RUN_CATEGORIES = sorted(set(SIM_SCENARIOS.values()))
+
+# magnitude meaning and sensible bounds per scenario: (default, low, high, meaning)
+MAGNITUDES = {
+    "Normal": (0.0, 0.0, 0.0, "not used"),
+    "Spike (positive)": (1.0, 0.3, 3.0, "spike height as a fraction of the reading (1.0 = doubles)"),
+    "Spike (negative)": (-0.5, -0.9, -0.2, "spike depth as a fraction of the reading"),
+    "Drift (upward)": (0.25, 0.05, 0.6, "offset reached at the end of the fault window (0.25 = +25%)"),
+    "Drift (downward)": (-0.25, -0.6, -0.05, "offset reached at the end of the fault window"),
+    "Stuck": (0.0, 0.0, 0.0, "not used: the sensor freezes at its reading at fault start"),
+    "Noise": (6.0, 3.0, 15.0, "noise multiplier on the faulty sensor"),
+    "Dropout": (0.3, 0.1, 0.6, "share of the fault window with no data"),
+    "Two faulty sensors": (0.25, 0.05, 0.6, "drift offset of the first sensor (the second one freezes)"),
+    "Real leak": (0.6, -0.5, 1.5, "plant-wide change in the true level (0.6 = +60%)"),
+    "Real leak + Drift": (0.6, 0.2, 1.5, "plant-wide rise; the faulty sensor also drifts +20%"),
+}
+
+
+@dataclass
+class ScenarioConfig:
+    """Everything needed to reproduce one simulated run."""
+    scenario: str = "Drift (upward)"
+    seed: int = 7
+    n_samples: int = N_SAMPLES
+    warmup: int = WARMUP
+    noise: float = NOISE
+    fault_sensor: int = FAULT_SENSOR
+    second_sensor: int = 4            # only used by "Two faulty sensors"
+    fault_start: int = FAULT_START
+    duration: int = None              # samples; None = until the end of the run
+    magnitude: float = None           # None = scenario default (see MAGNITUDES)
+    n_affected: int = N_SENSORS       # sensors moved by a shared process change
+    baselines: tuple = BASELINES
+
+    def validate(self):
+        """Raise ValueError for settings the simulator cannot honour."""
+        if self.scenario not in SIM_SCENARIOS:
+            raise ValueError(f"Unknown scenario {self.scenario!r}")
+        S = len(self.baselines)
+        if S < 3:
+            raise ValueError("At least three sensors are needed for peer comparison")
+        if not 60 <= self.n_samples <= 2000:
+            raise ValueError("n_samples must be between 60 and 2000")
+        if not 20 <= self.warmup < self.n_samples - 10:
+            raise ValueError("warmup must be at least 20 samples and leave room for the fault")
+        if not 0 < self.noise <= 0.1:
+            raise ValueError("noise must be between 0 and 10%")
+        if not 0 <= self.fault_sensor < S or not 0 <= self.second_sensor < S:
+            raise ValueError("sensor index out of range")
+        if self.scenario == "Two faulty sensors" and self.second_sensor == self.fault_sensor:
+            raise ValueError("the two faulty sensors must differ")
+        if not self.warmup <= self.fault_start < self.n_samples - 5:
+            raise ValueError("fault_start must be after the warm-up and at least 5 samples before the end")
+        if self.duration is not None and self.duration < 5:
+            raise ValueError("duration must be at least 5 samples")
+        if not 3 <= self.n_affected <= S:
+            raise ValueError("a shared change must affect at least three sensors")
+        lo, hi = MAGNITUDES[self.scenario][1:3]
+        if self.magnitude is not None and not lo <= self.magnitude <= hi:
+            raise ValueError(f"magnitude for {self.scenario} must be between {lo} and {hi}")
+
+    @property
+    def fault_end(self):
+        """Exclusive end index of the fault window."""
+        end = self.n_samples if self.duration is None else self.fault_start + self.duration
+        return min(end, self.n_samples)
+
+    @property
+    def mag(self):
+        return MAGNITUDES[self.scenario][0] if self.magnitude is None else self.magnitude
+
+    def run_id(self):
+        """Short stable identifier derived from every parameter."""
+        text = repr(sorted(asdict(self).items()))
+        return hashlib.sha1(text.encode()).hexdigest()[:10]
+
+
+@dataclass
+class SimulationRun:
+    """One simulated run. readings is what the instruments report; truth is the healthy reference."""
+    config: ScenarioConfig
+    readings: np.ndarray          # (samples, sensors); NaN = no data
+    truth: np.ndarray             # (samples, sensors); never altered by an instrument fault
+    labels: np.ndarray            # (samples, sensors); one of CLASSES
+    observable: np.ndarray        # (samples, sensors); False where a fault is too small to be visible yet
+    fault_sensors: list = field(default_factory=list)   # instrument-faulty sensors
+    names: list = field(default_factory=lambda: list(NAMES))
+
+    @property
+    def run_id(self):
+        return self.config.run_id()
+
+    @property
+    def expected_category(self):
+        return SIM_SCENARIOS[self.config.scenario]
+
+    def to_long_frame(self):
+        """One row per (sample, sensor) with the ground truth and the scenario parameters."""
+        cfg = self.config
+        T, S = self.readings.shape
+        t = np.repeat(np.arange(T), S)
+        s = np.tile(np.arange(S), T)
+        in_window = (t >= cfg.fault_start) & (t < cfg.fault_end)
+        return pd.DataFrame({
+            "run_id": self.run_id,
+            "scenario_id": cfg.scenario,
+            "time_step": t,
+            "sensor_id": [self.names[i] for i in s],
+            "healthy_reference": self.truth.ravel(),
+            "observed_reading": self.readings.ravel(),
+            "fault_type": self.labels.ravel(),
+            "fault_present": np.isin(self.labels.ravel(), INSTRUMENT_FAULTS),
+            "affected_sensor": np.isin(s, self.fault_sensors),
+            "fault_start": cfg.fault_start if cfg.scenario != "Normal" else -1,
+            "fault_end": cfg.fault_end if cfg.scenario != "Normal" else -1,
+            "in_fault_window": in_window & (cfg.scenario != "Normal"),
+            "magnitude": cfg.mag,
+            "noise": cfg.noise,
+            "seed": cfg.seed,
+        })
+
+
+def simulate(cfg):
+    """Generate one reproducible run from a ScenarioConfig (same config + seed = same run)."""
+    cfg.validate()
+    rng = np.random.default_rng(cfg.seed)
+    T, S = cfg.n_samples, len(cfg.baselines)
+    base = np.asarray(cfg.baselines, dtype=float)
+    t = np.arange(T)
+    a, b = cfg.fault_start, cfg.fault_end
+    k, mag = cfg.fault_sensor, cfg.mag
+    truth = np.tile(base, (T, 1))
+    labels = np.full((T, S), "Normal", dtype=object)
+    observable = np.ones((T, S), bool)
+    faulty = []
+
+    # (1) the plant: a shared process change moves the TRUE level of several sensors together
+    if cfg.scenario in ("Real leak", "Real leak + Drift"):
+        ramp = np.clip((t - a) / 30, 0, 1) * ((t >= a) & (t < b))
+        affected = rng.choice(S, size=cfg.n_affected, replace=False) if cfg.n_affected < S else np.arange(S)
+        if cfg.scenario == "Real leak + Drift" and k not in affected:
+            affected[0] = k
+        truth[:, affected] *= (1 + mag * ramp)[:, None]
+        changed = np.abs(truth / base - 1) >= 2 * cfg.noise
+        labels[changed] = "Process change"
+
+    # (2) the instruments: healthy noise on top of the truth
+    x = truth * (1 + cfg.noise * rng.standard_normal((T, S)))
+
+    # (3) instrument faults change the readings only; truth is never touched
+    def drift(sensor, offset):
+        span = max(b - a - 1, 1)
+        bias = np.zeros(T)
+        bias[a:b] = offset * (np.arange(b - a) / span)
+        x[:, sensor] *= 1 + bias
+        labels[a:b, sensor] = "Drift"
+        observable[a:b, sensor] = np.abs(bias[a:b]) >= 1.5 * cfg.noise   # too small to see yet
+        faulty.append(sensor)
+
+    def stuck(sensor):
+        x[a:b, sensor] = x[a, sensor]
+        labels[a:b, sensor] = "Stuck"
+        observable[a:min(a + 2, b), sensor] = False                       # needs a few repeats
+        faulty.append(sensor)
+
+    if cfg.scenario.startswith("Spike"):
+        events = int(rng.integers(3, 6))
+        starts = np.sort(rng.choice(np.arange(a, max(b - 2, a + 1)), size=min(events, max(b - 2 - a, 1)),
+                                    replace=False))
+        for s0 in starts:
+            n = int(rng.integers(1, 3))
+            x[s0:s0 + n, k] = truth[s0:s0 + n, k] * (1 + mag * rng.uniform(0.8, 1.2))
+            labels[s0:min(s0 + n, b), k] = "Spike"
+        faulty.append(k)
+    elif cfg.scenario.startswith("Drift"):
+        drift(k, mag)
+    elif cfg.scenario == "Stuck":
+        stuck(k)
+    elif cfg.scenario == "Noise":
+        x[a:b, k] = truth[a:b, k] * (1 + cfg.noise * mag * rng.standard_normal(b - a))
+        labels[a:b, k] = "Noise"
+        observable[a:min(a + 3, b), k] = False
+        faulty.append(k)
+    elif cfg.scenario == "Dropout":
+        missing = max(1, int(round(mag * (b - a))))
+        gaps = max(1, min(3, missing // 5))
+        lengths = np.full(gaps, missing // gaps)
+        lengths[: missing % gaps] += 1
+        cursor = a
+        for g, length in enumerate(lengths):
+            room = (b - cursor) - int(lengths[g + 1:].sum()) - length
+            start = cursor + int(rng.integers(0, max(room // max(gaps - g, 1), 0) + 1))
+            x[start:start + length, k] = np.nan
+            labels[start:start + length, k] = "Dropout"
+            cursor = start + length + 1
+        faulty.append(k)
+    elif cfg.scenario == "Two faulty sensors":
+        drift(k, mag)
+        stuck(cfg.second_sensor)
+    elif cfg.scenario == "Real leak + Drift":
+        drift(k, 0.2)
+
+    return SimulationRun(config=cfg, readings=x, truth=truth, labels=labels, observable=observable,
+                         fault_sensors=sorted(set(faulty)), names=NAMES[:S] if S <= len(NAMES)
+                         else [f"RAD-{i + 1:02d}" for i in range(S)])
+
+
+def random_config(scenario, seed):
+    """A random but reproducible parameter variation of one scenario (used to build datasets).
+
+    The same scenario category with different magnitudes, start times, durations, sensors and
+    noise gives many independent runs; a category alone is not a training example.
+    """
+    rng = np.random.default_rng(seed)
+    S = len(BASELINES)
+    sensor = int(rng.integers(0, S))
+    second = int((sensor + rng.integers(1, S)) % S)
+    start = int(rng.integers(55, 115))
+    duration = None if rng.random() < 0.5 else int(rng.integers(40, N_SAMPLES - start + 1))
+    default, lo, hi, _ = MAGNITUDES[scenario]
+    magnitude = None if lo == hi else float(np.round(rng.uniform(lo, hi), 3))
+    if scenario == "Real leak" and magnitude is not None and abs(magnitude) < 0.1:
+        magnitude = 0.1 if magnitude >= 0 else -0.1     # a change too small to see is not a test
+    return ScenarioConfig(scenario=scenario, seed=int(seed), noise=float(np.round(rng.uniform(0.008, 0.02), 4)),
+                          fault_sensor=sensor, second_sensor=second, fault_start=start, duration=duration,
+                          magnitude=magnitude, n_affected=int(rng.choice([4, 5, 5])))

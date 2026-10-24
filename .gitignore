@@ -2,3 +2,5 @@ public/
 __pycache__/
 .vercel/
 .venv/
+.pytest_cache/
+models/*.joblib
