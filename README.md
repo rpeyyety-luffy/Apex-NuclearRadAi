@@ -27,18 +27,24 @@ own ideal file) and with the other sensors, so a change that moves every sensor 
 reported as a possible real radiation rise rather than a sensor fault. Open
 `fault_detector.html#demo` to see it on demo data.
 
-### Machine-learned drift model
+### Machine-learned fault models
 
-`driftml.js` holds a logistic-regression drift detector. For every sensor it measures how the
-sensor's gap to its peers has moved away from its normal gap (the healthy start of the file) and
-turns six features (size, speed and persistence of that move) into a drift probability per reading.
+`faultml.js` holds two logistic-regression models, trained on labelled recordings in `ml/data`:
 
-Retrain after adding labelled recordings to `ml/data` (columns `Anomaly_Active` and
-`Faulty_Sensor`, as in the drift sets):
+- **Drift**: measures how far each sensor's gap to its peers has moved from its normal gap (the
+  healthy start of the file) and turns six features (size, speed and persistence of that move)
+  into a drift probability per reading.
+- **Dropout**: looks at how often, how recently and for how long a sensor has lost its signal, and
+  rates whether it is dropping out intermittently, also in the stretches between gaps. A single
+  missed sample is treated as a logger hiccup, not a failing sensor.
+
+The file name tells the trainer the fault type (`drift*.csv`, `dropout*.csv`; `normal_*.csv` is
+healthy). Labelled files need `Anomaly_Active` and `Faulty_Sensor` columns, as in the supplied
+sets. Retrain after adding recordings:
 
 ```bash
-node ml/train_drift_model.js
+node ml/train_models.js
 ```
 
-This rewrites the model block in `driftml.js` and the leave-one-file-out results in
+This rewrites the model block in `faultml.js` and the leave-one-file-out results in
 `ml/model_report.md`.

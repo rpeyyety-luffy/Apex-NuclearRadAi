@@ -200,12 +200,17 @@
     };
     // drift: the machine-learned model (driftml.js) catches drift early; the trend rule stays as a
     // backstop for small shifts on very noisy sensors, which the training data did not cover
-    const DML = typeof DriftML !== "undefined" ? DriftML : typeof require === "function" ? require("./driftml.js") : null;
-    const useML = opts.drift !== "rules" && peerMode && DML && DML.MODEL;
-    const ml = useML ? DML.predict(columns, baseN) : null;
-    sensors.forEach((s, i) => { s.driftProb = ml ? ml[i].map((r) => r.p) : null; });
+    // dropout: the dropout model rates how likely each sensor is to keep losing its signal
+    const FML = typeof FaultML !== "undefined" ? FaultML : typeof require === "function" ? require("./faultml.js") : null;
+    const models = opts.ml !== false && FML ? FML.MODELS : {};
+    const ml = peerMode && models.drift ? FML.predict("drift", columns, baseN) : null;
+    const dropML = models.dropout ? FML.predict("dropout", columns, baseN) : null;
+    sensors.forEach((s, i) => {
+      s.driftProb = ml ? ml[i].map((r) => r.p) : null;
+      s.dropoutProb = dropML ? dropML[i].map((r) => r.p) : null;
+    });
     const drift = (s, i, t) => {
-      if (ml && ml[i][t].p >= DML.MODEL.threshold) return ml[i][t].direction > 0 ? "Drift high" : "Drift low";
+      if (ml && ml[i][t].p >= models.drift.threshold) return ml[i][t].direction > 0 ? "Drift high" : "Drift low";
       return s.rel[t] > s.thr ? "Drift high" : s.rel[t] < -s.thr ? "Drift low" : null;
     };
     for (const s of sensors) s.rel = new Array(n);
@@ -275,6 +280,16 @@
             ? `Matches normal behaviour apart from ${faults.length} isolated reading${faults.length > 1 ? "s" : ""}.`
             : "Matches normal behaviour.";
         }
+      }
+      const dropNow = s.dropoutProb ? s.dropoutProb[n - 1] : 0;
+      if (s.dropoutProb && dropNow >= models.dropout.threshold) {
+        const gaps = s.type.filter((t, k) => t === "No signal" && s.type[k - 1] !== "No signal").length;
+        if (s.status === "Healthy" || s.status === "At risk") {
+          s.status = "Watch";
+          s.fault = "No signal";
+          s.summary = `Lost its signal ${gaps} time${gaps === 1 ? "" : "s"}.`;
+        }
+        s.summary += ` The dropout model rates further signal loss ${Math.round(100 * dropNow)}% likely.`;
       }
       s.advice = s.fault ? ADVICE[s.fault] : [];
     }
