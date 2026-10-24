@@ -35,7 +35,8 @@ const STATUS = {
 function severity(issue) {
   if (!issue || issue === "Awaiting data") return "waiting";
   if (issue === "Healthy") return "ok";
-  return ["Missing readings", "Spike / outlier", "Stuck signal"].includes(issue) ? "bad" : "warn";
+  if (issue.startsWith("Watch") || issue.startsWith("At risk")) return "warn";
+  return ["Missing readings", "Spike / outlier", "Stuck signal", "Noisy signal", "Drift high", "Drift low"].includes(issue) ? "bad" : "warn";
 }
 
 // ------------------------------------------------------------------ materials

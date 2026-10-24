@@ -194,10 +194,22 @@
     }
     const events = [];
     const counting = (s, t) => Math.sqrt(Math.max(1, s.norm[t] || 1)); // Poisson: scatter grows with level
-    const noisy = (s, t) => s.scatter[t] > NOISE_RATIO * s.noise * counting(s, t);
+    // noise and spikes are judged against the peers' roughness at the same moment: when the whole
+    // plant becomes rough (e.g. pressure collapsing in a leak) that is the plant, not one sensor
+    const rough = (s, t) => s.scatter[t] / (s.noise * counting(s, t));
+    const peerRough = (s, t) => {
+      if (!peerMode) return 1;
+      const r = median(sensors.filter((o) => o !== s).map((o) => rough(o, t)));
+      return Number.isFinite(r) ? Math.max(1, r) : 1;
+    };
+    const noisy = (s, t) => rough(s, t) > NOISE_RATIO * peerRough(s, t);
+    const spiky = (s, t) => Math.abs(s.x[t] - s.level[t]) > SPIKE_SIGMA * s.sd * counting(s, t) * peerRough(s, t);
+    // offset from the peers as a fraction of normal level; a ratio to the peers would blow up when
+    // every sensor falls towards zero together
     const relTo = (s, t, pool) => {
       const peers = peerMode ? median(pool.filter((o) => o !== s).map((o) => o.norm[t])) : 1;
-      return s.norm[t] / (Number.isFinite(peers) ? peers : 1) - 1;
+      const p = Number.isFinite(peers) ? peers : 1;
+      return (s.norm[t] - p) / Math.max(1, p);
     };
     // drift: the machine-learned model (driftml.js) catches drift early; the trend rule stays as a
     // backstop for small shifts on very noisy sensors, which the training data did not cover
@@ -249,7 +261,7 @@
         if (!Number.isFinite(s.x[t])) type = "No signal";
         else if (stuckNow(s, t)) type = "Stuck";
         else if (noisy(s, t) || (s.noiseML && s.noiseML[t])) type = "Noisy";
-        else if (Math.abs(s.x[t] - s.level[t]) > SPIKE_SIGMA * s.sd * counting(s, t)) type = "Spike";
+        else if (spiky(s, t)) type = "Spike";
         else if (drift(s, i, t)) type = drift(s, i, t);
         else if (event && high.includes(s)) type = "Real rise";
         else type = "Normal";

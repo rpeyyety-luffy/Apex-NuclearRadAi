@@ -32,7 +32,7 @@
     </section>
 
     <section class="upload">
-      <div><h2>Analyse an Excel data set</h2><p>Choose an <b>.xlsx</b>, <b>.xls</b>, or <b>.csv</b> file. Columns named <code>RAD-01</code>, <code>RAD-02</code>, etc. are detected automatically. An optional <code>sample</code>, <code>time</code>, or <code>timestamp</code> column is used for the x-axis.</p></div>
+      <div><h2>Analyse an Excel data set</h2><p>Choose an <b>.xlsx</b>, <b>.xls</b>, or <b>.csv</b> file. Sensor columns named <code>RAD-01</code> … <code>RAD-05</code> or <code>Sensor_1</code> … <code>Sensor_5</code> (units such as <code>Sensor_1_MPa</code> are fine) are detected automatically. An optional <code>sample</code>, <code>time</code>, <code>Time_s</code>, or <code>timestamp</code> column is used for the x-axis; label columns such as <code>Anomaly_Active</code>, <code>Real_Leak</code> or <code>Faulty_Sensor</code> are ignored.</p></div>
       <div class="actions"><label class="file" for="file">Upload data</label><input id="file" type="file" accept=".xlsx,.xls,.csv"><button id="demo" class="button" type="button">Load demo data</button></div>
     </section>
     <div id="message" class="message"></div>
@@ -44,6 +44,8 @@
     <div id="charts" class="charts"></div>
     <section class="format"><b style="color:var(--ink)">Data format</b><br>Put one reading per row. Example headers: <code>sample, RAD-01, RAD-02, RAD-03, RAD-04, RAD-05</code>. Values must be numeric; blank RAD cells are treated as missing readings. Analysis runs entirely in this browser and is a training aid, not a plant-control or safety system.</section>
   </main>
+  <script src="faultml.js"></script>
+  <script src="detector.js"></script>
   <script src="app.js"></script>
   <script type="module" src="reactor3d.js"></script>
 </body>

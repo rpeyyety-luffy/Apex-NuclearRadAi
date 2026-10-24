@@ -39,50 +39,56 @@ function demoRows() {
 function normalizeRows(rawRows) {
   if (!rawRows.length) throw new Error('The selected sheet has no data rows.');
   const headers = Object.keys(rawRows[0]);
-  const canonical = (header) => String(header).trim().toUpperCase().replace(/[-_ ]/g, '');
-  const headerFor = new Map(expectedSensors.map((sensor) => [
-    sensor,
-    headers.find((header) => canonical(header) === canonical(sensor))
-  ]));
+  // a sensor column is found by its number: "RAD-01", "Sensor_1_MPa" and "Sensor 1 (uSv/h)" are all sensor 1;
+  // answer/label columns such as Anomaly_Active, Real_Leak or Faulty_Sensor are never readings
+  const sensorNumber = (header) => {
+    const h = String(header).trim();
+    if (/anomal|leak|faulty|label/i.test(h)) return null;
+    const m = h.replace(/\(.*?\)/g, '').match(/^(?:rad|sensor)[\s_-]*0*(\d+)/i);
+    return m ? parseInt(m[1], 10) : null;
+  };
+  const headerFor = new Map(expectedSensors.map((sensor, i) => [sensor, headers.find((h) => sensorNumber(h) === i + 1)]));
   const missing = expectedSensors.filter((sensor) => !headerFor.get(sensor));
-  if (missing.length) throw new Error(`Missing required column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. The sheet must contain RAD-01 through RAD-05.`);
+  if (missing.length) throw new Error(`Missing required column${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. The sheet must contain five sensor columns (RAD-01 to RAD-05, or Sensor_1 to Sensor_5).`);
   const sensors = expectedSensors;
-  const indexHeader = headers.find((header) => /^(sample|time|timestamp|date)$/i.test(String(header)));
+  const indexHeader = headers.find((header) => /^(sample|time|time_s|timestamp|date)$/i.test(String(header).trim()));
   const rows = rawRows.map((row, index) => ({
     label: indexHeader && row[indexHeader] !== undefined && row[indexHeader] !== '' ? String(row[indexHeader]) : String(index),
     values: sensors.map((sensor) => numeric(row[headerFor.get(sensor)]))
   })).filter((row) => row.values.some(Number.isFinite));
-  if (rows.length < 5) throw new Error('At least five rows with numeric RAD readings are required.');
+  if (rows.length < 5) throw new Error('At least five rows with numeric sensor readings are required.');
   return { sensors, rows };
+}
+
+// detector.js status and fault type -> the wording used on this page
+const ISSUE = { 'No signal': 'Missing readings', Stuck: 'Stuck signal', Spike: 'Spike / outlier', Noisy: 'Noisy signal', 'Drift high': 'Drift high', 'Drift low': 'Drift low' };
+function issueFor(s) {
+  if (s.status === 'Healthy') return 'Healthy';
+  const fault = ISSUE[s.fault] || s.fault;
+  if (s.status === 'At risk') return `At risk · ${fault}`;
+  if (s.status === 'Watch') return `Watch · ${fault}`;
+  return fault;
 }
 
 function analyse(data) {
   const { sensors, rows } = data;
   const baselineCount = Math.max(5, Math.min(40, Math.floor(rows.length * 0.22)));
+  const columns = sensors.map((_, i) => rows.map((row) => row.values[i]));
+  // the same detector and machine-learned models as fault_detector.html (detector.js, faultml.js)
+  const detection = Detector.analyse(sensors, columns);
   const results = sensors.map((sensor, sensorIndex) => {
-    const series = rows.map((row) => row.values[sensorIndex]);
+    const series = columns[sensorIndex];
     const baseline = mean(series.slice(0, baselineCount));
     const peer = rows.map((row) => median(row.values.filter((_, i) => i !== sensorIndex)));
     const latest = series.at(-1);
-    const missing = series.filter((value) => !Number.isFinite(value)).length;
-    const high = series.filter((value) => Number.isFinite(value) && value > baseline * 1.3).length;
-    const peerDeviations = series.map((value, i) => Number.isFinite(value) && Number.isFinite(peer[i]) ? Math.abs(value / peer[i] - 1) : 0);
-    const maxDeviation = Math.max(...peerDeviations);
-    const lateDeviation = mean(peerDeviations.slice(-Math.max(5, Math.floor(rows.length * 0.2))));
-    const earlyDeviation = mean(peerDeviations.slice(0, baselineCount));
-    let repeats = 0;
-    for (let i = 1; i < series.length; i += 1) if (Number.isFinite(series[i]) && series[i] === series[i - 1]) repeats += 1; else repeats = 0;
-    let issue = 'Healthy', recommendation = 'Continue routine monitoring; readings agree with peer channels.';
-    if (missing) { issue = 'Missing readings'; recommendation = 'Inspect the acquisition path, power, and communications; restore or replace the affected channel.'; }
-    else if (repeats >= 4) { issue = 'Stuck signal'; recommendation = 'Inspect and replace or recalibrate the sensor; consecutive identical readings indicate a frozen channel.'; }
-    else if (lateDeviation > Math.max(0.05, earlyDeviation * 2.2)) { issue = 'Peer drift'; recommendation = 'Schedule calibration and verify the channel against a reference instrument.'; }
-    else if (maxDeviation > 0.2) { issue = 'Spike / outlier'; recommendation = 'Inspect the sensor and its signal conditioning; compare against an independent reading before acting.'; }
-    else if (high) { issue = 'Elevated reading'; recommendation = 'Review the affected interval with operators and corroborate with the other RAD channels.'; }
-    return { sensor, series, peer, baseline, latest, missing, high, maxDeviation, issue, recommendation };
+    const s = detection.sensors[sensorIndex];
+    const issue = issueFor(s);
+    const recommendation = s.advice.length ? s.advice.join(' ') : 'Continue routine monitoring; readings agree with peer channels.';
+    return { sensor, series, peer, baseline, latest, issue, status: s.status, summary: s.summary, recommendation };
   });
   const active = results.filter((result) => result.issue !== 'Healthy');
   const network = results.filter((result) => Number.isFinite(result.latest)).map((result) => result.latest);
-  return { ...data, baselineCount, results, active, latestMedian: median(network) };
+  return { ...data, baselineCount, results, active, latestMedian: median(network), verdict: detection.verdict, leak: detection.leak };
 }
 
 function renderPolyline(values, color, domain, width, height, pad) {
@@ -132,16 +138,26 @@ function render(report) {
     ['Samples', report.rows.length], ['RAD channels', report.sensors.length], ['Latest network median', report.latestMedian.toFixed(2)], ['Issues flagged', report.active.length]
   ].map(([label, value]) => `<div class="metric">${label}<b>${value}</b><span class="small">uploaded data set</span></div>`).join('');
   $('summary').classList.add('show');
-  const risk = report.active.length ? 'ATTENTION' : 'SYSTEM NOMINAL';
-  $('status').innerHTML = `<div class="eye" style="color:${report.active.length ? 'var(--amber)' : 'var(--mint)'}">${risk} · uploaded data</div><b>${report.active.length ? `${report.active.length} channel${report.active.length > 1 ? 's' : ''} need review` : 'No data-quality anomalies detected'}</b><span class="sub">Recommendations below are based on peer comparison and baseline thresholds. Escalate operational decisions through approved plant procedures.</span>`;
-  $('status').style.borderLeftColor = report.active.length ? 'var(--amber)' : 'var(--mint)';
+  const { level, text } = report.verdict;
+  const leak = text.startsWith('Real pressure loss');
+  const n = report.active.length, channels = `${n} channel${n === 1 ? '' : 's'}`;
+  const banner = {
+    event: ['var(--red)', 'PLANT EVENT · NOT A SENSOR FAULT', leak ? 'Real pressure loss across the plant' : 'Possible real radiation rise'],
+    fault: ['var(--amber)', 'SENSOR FAULT', `${channels} need${n === 1 ? 's' : ''} review`],
+    watch: ['var(--amber)', 'ATTENTION', `${channels} need${n === 1 ? 's' : ''} attention`],
+    ok: ['var(--mint)', 'SYSTEM NOMINAL', 'No data-quality anomalies detected'],
+  }[level] || ['var(--amber)', 'ATTENTION', `${channels} need review`];
+  const [color, label, headline] = banner;
+  $('status').innerHTML = `<div class="eye" style="color:${color}">${label} · uploaded data</div><b>${headline}</b><span class="sub">${text} Recommendations are a training aid; escalate operational decisions through approved plant procedures.</span>`;
+  $('status').style.borderLeftColor = color;
   $('status').classList.add('show');
   renderCore(report.results);
   $('findingsTitle').hidden = false;
   $('findings').innerHTML = report.results.map((result) => {
-    const type = result.issue === 'Healthy' ? 'ok' : result.issue === 'Spike / outlier' || result.issue === 'Missing readings' ? 'bad' : 'warn';
+    const type = result.status === 'Healthy' ? 'ok' : result.status === 'Faulty' ? 'bad' : 'warn';
     const meta = `Latest: ${Number.isFinite(result.latest) ? result.latest.toFixed(2) : 'missing'} · baseline: ${result.baseline.toFixed(2)}`;
-    return `<article class="finding ${type}"><h3>${result.sensor} · ${result.issue}</h3><p>${result.recommendation}</p><p class="small" style="margin-top:9px">${meta}</p></article>`;
+    const advice = result.status === 'Healthy' ? '' : `<p style="margin-top:7px">${result.recommendation}</p>`;
+    return `<article class="finding ${type}"><h3>${result.sensor} · ${result.issue}</h3><p>${result.summary}</p>${advice}<p class="small" style="margin-top:9px">${meta}</p></article>`;
   }).join('');
   $('findings').classList.add('show');
   $('chartsTitle').hidden = false;
