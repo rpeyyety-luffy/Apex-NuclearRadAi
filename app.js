@@ -121,11 +121,9 @@ function renderChart(result, labels) {
 }
 
 function renderCore(results = expectedSensors.map((sensor) => ({ sensor, issue: 'Awaiting data', latest: NaN }))) {
-  const severity = (issue) => issue === 'Healthy' || issue === 'Awaiting data' ? '' : issue === 'Missing readings' || issue === 'Spike / outlier' || issue === 'Stuck signal' ? 'bad' : 'warn';
-  $('coreSensors').innerHTML = results.map((result, index) => {
-    const reading = Number.isFinite(result.latest) ? result.latest.toFixed(1) : 'awaiting data';
-    return `<div class="rad-node n${index} ${severity(result.issue)}">${result.sensor}<span>${reading} · ${result.issue}</span></div>`;
-  }).join('');
+  // the 3D model (reactor3d.js) draws each monitor's status from these results
+  window.coreResults = results;
+  window.dispatchEvent(new CustomEvent('core-results', { detail: results }));
 }
 
 function render(report) {
@@ -173,4 +171,5 @@ $('file').addEventListener('change', (event) => {
   reader.readAsArrayBuffer(file);
 });
 $('demo').addEventListener('click', () => loadRows(demoRows(), 'Demo data'));
+if (location.hash === '#demo') loadRows(demoRows(), 'Demo data');
 renderCore();

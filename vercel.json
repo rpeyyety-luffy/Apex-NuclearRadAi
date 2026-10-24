@@ -1,6 +1,6 @@
 {
   "framework": null,
   "installCommand": "",
-  "buildCommand": "mkdir -p public && cp index.html app.js sensor_charts.html fault_detector.html nuclearrad.py charts.py sensor_charts.py fault_detector.py public/",
+  "buildCommand": "mkdir -p public && cp index.html app.js reactor3d.js fault_detector.html detector.js sensor_charts.html nuclearrad.py charts.py sensor_charts.py public/",
   "outputDirectory": "public"
 }
