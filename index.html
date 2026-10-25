@@ -3,193 +3,436 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>NuclearRad | Data Monitor</title>
+  <title>NuclearRad AI · Radiation Monitoring &amp; Sensor Analytics</title>
+  <meta name="description" content="Browser-based review of radiation-monitor sensor data: peer comparison, anomaly detection and maintenance guidance. A training aid, not a plant-control or safety system.">
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
-    /* Plum theme: deep plum page with fuchsia and orange glows; the 3D model and charts sit in dark
-       instrument screens. Status colours are bright everywhere. */
+    /* ================================================================ design tokens */
     :root{
-      --paper:#13091a;--paper2:#1c0f26;--card:#211130;--rule:#4a2a5e;--rule2:#2c183d;
-      --ink:#fbf1ff;--muted:#cdb6d9;--faint:#9f86ad;
-      --accent:#ff4fa3;--accent2:#ff9a3c;--accent-ink:#1a0612;
-      --mint:#34d399;--amber:#fbbf24;--red:#fb7185;
-      --screen:#0b1211;--screen-ink:#e8eee9;--screen-muted:#9aa9a4;
-      --radius:12px;--shadow:0 1px 0 rgba(255,255,255,.04) inset,0 18px 40px -22px rgba(0,0,0,.8);
-      --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-      --display:"Space Grotesk","IBM Plex Sans",system-ui,sans-serif;
-      --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+      color-scheme:dark;
+      /* surfaces: charcoal with a green undertone */
+      --bg:#0c1110;--surface:#121918;--elevated:#17211f;--sunken:#0e1513;
+      --border:#24302d;--border-strong:#31403c;
+      /* text */
+      --text:#e4eae7;--text-2:#9aa9b3;--text-3:#808f99;
+      /* semantic colours */
+      --accent:#3ccf91;--accent-strong:#2bb67c;--accent-ink:#06130d;
+      --info:#4fc1e3;--ok:#3ccf91;--warn:#f0b03c;--crit:#ef5d5d;--idle:#7c8b94;
+      /* aliases used by app.js / reactor3d.js markup */
+      --mint:var(--ok);--amber:var(--warn);--red:var(--crit);--ink:var(--text);--muted:var(--text-2);
+      /* shape and rhythm */
+      --r-sm:6px;--r:8px;--r-lg:10px;
+      --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:20px;--s6:24px;--s8:32px;--s10:40px;
+      --control:40px;--panel-pad:20px;
+      --focus:0 0 0 2px var(--bg),0 0 0 4px var(--info);
+      /* type */
+      --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+      --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      --fs-xs:12px;--fs-sm:13px;--fs-md:14px;--fs-base:15px;--fs-lg:17px;--fs-xl:20px;--fs-2xl:26px;
     }
-    *{box-sizing:border-box}
-    html{-webkit-text-size-adjust:100%}
-    body{margin:0;color:var(--ink);font:15px/1.5 var(--sans);background-color:var(--paper);
-      background-image:radial-gradient(900px 520px at 85% -8%,rgba(217,70,239,.28),transparent 65%),
-        radial-gradient(760px 480px at -5% 18%,rgba(255,79,163,.16),transparent 62%),
-        linear-gradient(rgba(217,70,239,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(217,70,239,.07) 1px,transparent 1px);
-      background-size:auto,auto,32px 32px,32px 32px;background-position:0 0,0 0,-1px -1px,-1px -1px}
-    .shell{max-width:1420px;margin:auto;padding:0 32px 56px}
-    code{font:500 .86em var(--mono);color:#f5d0fe;background:rgba(217,70,239,.16);border:1px solid rgba(217,70,239,.25);padding:0 5px;border-radius:4px}
+    *,*::before,*::after{box-sizing:border-box}
+    html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+    body{margin:0;background:var(--bg);color:var(--text);font:400 var(--fs-base)/1.55 var(--font);font-feature-settings:"cv11","ss01";-webkit-font-smoothing:antialiased}
+    h1,h2,h3,p{margin:0}
+    a{color:var(--info);text-underline-offset:3px}
+    code{font:500 .86em var(--mono);color:var(--text);background:var(--elevated);border:1px solid var(--border);border-radius:4px;padding:0 5px;white-space:nowrap}
+    .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+    :focus-visible{outline:none;box-shadow:var(--focus);border-radius:var(--r-sm)}
+    .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+    .wrap{max-width:1400px;margin:0 auto;padding:0 var(--s8)}
 
-    /* masthead */
-    .masthead{position:relative;margin:0 -32px 28px;padding:34px 32px 30px;border-bottom:1px solid rgba(217,70,239,.25);
-      background:linear-gradient(120deg,rgba(134,25,143,.55),rgba(28,15,38,.2) 50%,rgba(234,88,12,.35))}
-    .masthead::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;
-      background:repeating-linear-gradient(-45deg,#fbbf24 0 12px,#13091a 12px 24px)}
-    .eye{color:var(--accent);font:600 11px/1.4 var(--mono);letter-spacing:1.4px;text-transform:uppercase}
-    h1{font:700 clamp(34px,5vw,56px)/1.06 var(--display);letter-spacing:-1.5px;margin:10px 0 10px;
-      background:linear-gradient(95deg,#ffffff 20%,#ffc2e0 60%,#ffb067);-webkit-background-clip:text;background-clip:text;color:transparent}
-    .sub{color:var(--muted);font-size:16px;max-width:760px}
-
-    /* 3D console: a dark screen set into the page; reactor3d.js styles its contents */
-    .core-scene{--ink:var(--screen-ink);--muted:var(--screen-muted);--panel2:#14201d;--mint:#8ee2bd;--amber:#f3b969;--red:#ff746c;
-      display:grid;grid-template-columns:minmax(0,1fr) 330px;margin:0 0 28px;border-radius:14px;overflow:hidden;
-      background:var(--screen);color:var(--screen-ink);box-shadow:0 0 0 1px rgba(255,79,163,.35),0 0 60px -18px rgba(255,79,163,.45),0 30px 60px -30px rgba(0,0,0,.9)}
-    .scene-view{position:relative;height:560px;min-width:0;background:radial-gradient(ellipse at 50% 40%,#16302a,#0b1211 70%)}
-    .scene-view canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
-    .scene-labels{position:absolute;inset:0;pointer-events:none}
-    .scene-copy{position:absolute;z-index:3;left:22px;top:20px;pointer-events:none}
-    .scene-copy .eye{color:var(--mint)}
-    .scene-copy h2{margin:4px 0;font:600 24px var(--display);letter-spacing:-.3px}
-    .scene-copy p{margin:0;color:var(--muted)}
-    .scene-hint{position:absolute;z-index:3;left:22px;bottom:16px;color:var(--muted);font:11px var(--mono);pointer-events:none}
-    .scene-legend{position:absolute;z-index:3;right:18px;bottom:16px;color:var(--muted);font:11px var(--mono);pointer-events:none}
-    .scene-legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 4px 0 11px;background:var(--mint)}
-    .scene-loading{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:13px}
-    .scene-view.ready .scene-loading{display:none}
-    .scene-fallback{position:absolute;left:20px;right:20px;top:45%;text-align:center;color:var(--muted)}
-    .scene-view.no-webgl .scene-loading{display:none}
-    .sensor-tag{--tone:#9aa9a4;pointer-events:auto;cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:1px;padding:6px 9px;margin-top:-34px;border:1px solid var(--tone);border-left-width:3px;border-radius:6px;background:rgba(8,16,14,.86);color:var(--screen-ink);font:11px var(--sans);text-align:left;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.4);backdrop-filter:blur(3px)}
-    .sensor-tag b{color:var(--tone);font:600 11px var(--mono)}
-    .sensor-tag em{font-style:normal;color:var(--screen-muted);font-size:10px}
-    .sensor-tag.selected{background:rgba(20,40,34,.95);box-shadow:0 0 0 2px var(--tone)}
-    .sensor-panel{padding:18px 14px;border-left:1px solid #22332e;background:#0e1816;display:flex;flex-direction:column;gap:9px;max-height:560px;overflow-y:auto}
-    .sensor-panel>.eye{color:var(--mint);padding:0 2px 4px}
-    .sensor-card{--tone:#9aa9a4;all:unset;box-sizing:border-box;cursor:pointer;display:flex;flex-direction:column;gap:3px;padding:11px 12px;border:1px solid #263832;border-left:4px solid var(--tone);border-radius:8px;background:#13201c;transition:background .15s,border-color .15s}
-    .sensor-card:hover,.sensor-card.selected{border-color:var(--tone);background:#172723}
-    .sensor-card:focus-visible{outline:2px solid var(--mint)}
-    .sc-top{display:flex;justify-content:space-between;gap:8px}
-    .sc-top b{color:var(--tone);font:600 12px var(--mono)}
-    .sc-top i{font-style:normal;font-size:11px;color:var(--tone)}
-    .sc-name{font-weight:600;font-size:14px;color:var(--screen-ink)}
-    .sc-meta{color:var(--screen-muted);font-size:11.5px;line-height:1.35}
-    .sc-read{display:flex;justify-content:space-between;margin-top:4px;font-size:11px;color:var(--screen-muted)}
-    .sc-read b{color:var(--screen-ink);font-family:var(--mono);font-weight:500}
-
-    /* upload panel */
-    .upload{display:grid;grid-template-columns:1fr auto;gap:28px;align-items:center;margin:0 0 26px;padding:24px 26px;
-      background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);box-shadow:var(--shadow);position:relative}
-    .upload::before{content:"";position:absolute;left:0;top:18px;bottom:18px;width:3px;border-radius:0 3px 3px 0;background:linear-gradient(var(--accent),var(--accent2))}
-    .upload h2{font:600 21px var(--display);letter-spacing:-.3px;margin:0 0 6px}
-    .upload p{color:var(--muted);margin:0;line-height:1.6;max-width:880px}
-    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    .button,label.file{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 18px;border-radius:8px;font:600 14px var(--sans);cursor:pointer;transition:transform .12s,box-shadow .12s,background .12s}
-    label.file{background:linear-gradient(135deg,var(--accent),var(--accent2));color:var(--accent-ink);border:0;box-shadow:0 10px 24px -10px rgba(255,79,163,.8)}
-    label.file:hover{filter:brightness(1.08);transform:translateY(-1px)}
-    .button{background:transparent;color:var(--ink);border:1px solid rgba(165,243,252,.45)}
-    .button:hover{border-color:var(--accent);background:rgba(255,79,163,.08);transform:translateY(-1px)}
-    label.file:focus-visible,.button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    /* ================================================================ buttons */
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s2);height:var(--control);padding:0 var(--s4);border-radius:var(--r-sm);border:1px solid transparent;font:600 var(--fs-md)/1 var(--font);white-space:nowrap;cursor:pointer;text-decoration:none;transition:background .15s,border-color .15s,color .15s}
+    .btn svg{width:16px;height:16px;flex:none}
+    .btn-primary{background:var(--accent);color:var(--accent-ink)}
+    .btn-primary:hover{background:var(--accent-strong)}
+    .btn-secondary{background:var(--elevated);color:var(--text);border-color:var(--border-strong)}
+    .btn-secondary:hover{border-color:var(--text-3);background:#1c2825}
+    .btn-ghost{background:transparent;color:var(--text-2);height:32px;padding:0 var(--s3)}
+    .btn-ghost:hover{color:var(--text);background:var(--elevated)}
+    .btn-sm{height:32px;padding:0 var(--s3);font-size:var(--fs-sm)}
     input[type=file]{display:none}
 
-    /* messages, metrics, status */
-    .message{display:none;margin:0 0 18px;padding:12px 16px;border:1px solid rgba(251,191,36,.4);background:rgba(251,191,36,.1);color:#fde68a;border-radius:8px}
-    .message.show{display:block}
-    .summary{display:none;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
-    .summary.show{display:grid}
-    .metric{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:14px 16px;color:var(--muted);font-size:13px;box-shadow:var(--shadow)}
-    .metric{background:linear-gradient(160deg,#2e1440,var(--card))}
-    .metric b{font:600 26px var(--mono);display:block;margin:6px 0 2px;color:#ffc2e0;letter-spacing:-.5px}
-    .small{font:11px/1.5 var(--mono);color:var(--faint)}
-    .status{display:none;padding:18px 22px;background:var(--card);border:1px solid var(--rule);border-left:5px solid var(--mint);border-radius:var(--radius);margin-bottom:24px;box-shadow:var(--shadow)}
-    .status.show{display:block}
-    .status b{display:block;font:600 21px/1.3 var(--display);letter-spacing:-.3px;margin:6px 0}
-    .status .sub{font-size:14px;max-width:none}
+    /* ================================================================ badges, chips, tooltips */
+    .badge{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:999px;font:600 var(--fs-xs)/1 var(--font);letter-spacing:.2px;white-space:nowrap;border:1px solid;color:var(--idle);border-color:color-mix(in srgb,var(--idle) 40%,transparent);background:color-mix(in srgb,var(--idle) 10%,transparent)}
+    .badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+    .badge.ok,.scenario.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 38%,transparent);background:color-mix(in srgb,var(--ok) 10%,transparent)}
+    .badge.warn,.scenario.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent);background:color-mix(in srgb,var(--warn) 10%,transparent)}
+    .badge.bad,.scenario.bad{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 45%,transparent);background:color-mix(in srgb,var(--crit) 12%,transparent)}
+    .badge.info{color:var(--info);border-color:color-mix(in srgb,var(--info) 40%,transparent);background:color-mix(in srgb,var(--info) 10%,transparent)}
+    .badge.busy::before{animation:pulse 1s ease-in-out infinite}
+    .chip{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:var(--r-sm);background:var(--elevated);border:1px solid var(--border);font:600 var(--fs-xs)/1 var(--mono);color:var(--text-2)}
+    [data-tip]{position:relative;text-decoration:underline dotted var(--text-3);text-underline-offset:3px;cursor:help}
+    /* tooltip bubbles exist only while shown, so a hidden bubble can never widen the page */
+    [data-tip]::after{content:attr(data-tip);display:none;position:absolute;left:0;bottom:calc(100% + 8px);z-index:20;width:max-content;max-width:min(240px,70vw);padding:8px 10px;border-radius:var(--r-sm);background:#1f2b28;border:1px solid var(--border-strong);color:var(--text);font:400 var(--fs-xs)/1.45 var(--font);text-transform:none;letter-spacing:0;white-space:normal;box-shadow:0 8px 24px rgba(0,0,0,.4);pointer-events:none}
+    [data-tip]:hover::after,[data-tip]:focus-visible::after{display:block}
+    .metric:nth-child(n+3) [data-tip]::after{left:auto;right:0}
 
-    /* findings and charts */
-    .section{font:600 24px var(--display);letter-spacing:-.4px;margin:30px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--rule)}
-    .finding-grid{display:none;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
-    .finding-grid.show{display:grid}
-    .finding{padding:16px;border-radius:var(--radius);border:1px solid var(--rule);border-top:4px solid var(--rule);background:var(--card);box-shadow:var(--shadow)}
-    .finding.ok{border-top-color:var(--mint)}
-    .finding.warn{border-top-color:var(--amber)}
-    .finding.bad{border-top-color:var(--red)}
-    .finding h3{margin:0 0 7px;font:600 16px var(--display)}
-    .finding p{margin:0;color:var(--muted);line-height:1.5;font-size:14px}
-    .finding p.small{font:11.5px/1.5 var(--mono);color:var(--faint)}
-    .health{margin:12px 0 6px;padding:10px 11px;background:rgba(19,9,26,.55);border:1px solid var(--rule2);border-radius:8px}
-    .health-top{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
-    .health-top b{font:600 13px var(--mono)}
-    .health-bar{height:6px;margin:6px 0 8px;background:var(--rule2);border-radius:3px;overflow:hidden}
-    .health-bar i{display:block;height:100%}
-    .finding .health-action{margin:0;color:var(--ink)}
-    .health-when{display:flex;flex-direction:column;gap:2px;margin-top:4px;font-size:12px;color:var(--muted)}
-    .health-when b{color:var(--ink);font-weight:600}
-    .charts{display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:4px}
-    .charts.show{display:grid}
-    .chart-card{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
-    .chart-card h3{margin:0 0 2px;font:600 20px var(--display)}
-    .chart-card p{margin:0;color:var(--muted);font-size:14px}
-    svg{width:100%;height:280px;margin-top:12px;display:block;background:var(--screen);border-radius:8px}
-    .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font-size:12px}
-    .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
-    .format{margin-top:32px;padding:18px 20px;background:rgba(28,15,38,.7);border:1px dashed var(--rule);border-radius:var(--radius);color:var(--muted);line-height:1.6}
+    /* ================================================================ panels */
+    .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg)}
+    .panel-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);padding:var(--s4) var(--panel-pad);border-bottom:1px solid var(--border)}
+    .panel-title{font:600 var(--fs-lg)/1.3 var(--font)}
+    .panel-sub{color:var(--text-2);font-size:var(--fs-sm)}
+    .eyebrow{color:var(--text-3);font:600 11px/1.4 var(--font);letter-spacing:.9px;text-transform:uppercase}
+    .section{margin-top:var(--s10)}
+    .section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--s4);flex-wrap:wrap;margin-bottom:var(--s4)}
+    .section-head h2{font:600 var(--fs-xl)/1.3 var(--font);letter-spacing:-.2px}
+    .section-head p{color:var(--text-2);font-size:var(--fs-md);margin-top:2px}
+    .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s2);padding:var(--s10) var(--s6);text-align:center;color:var(--text-2);border:1px dashed var(--border-strong);border-radius:var(--r-lg);background:var(--sunken)}
+    .empty b{color:var(--text);font-weight:600}
+    .empty[hidden]{display:none}
 
-    /* detected scenario badge and maintenance action pill */
-    .finding h3{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
-    .scenario{font:700 11px/1 var(--mono);letter-spacing:.6px;text-transform:uppercase;padding:6px 9px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
-    .scenario.ok{color:var(--mint);background:color-mix(in srgb,var(--mint) 14%,transparent)}
-    .scenario.warn{color:var(--amber);background:color-mix(in srgb,var(--amber) 16%,transparent)}
-    .scenario.bad{color:#fff;background:var(--red);border-color:var(--red);box-shadow:0 0 18px -4px var(--red)}
-    .finding .health-action,.sc-action{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 0}
-    .act{display:inline-flex;align-items:center;font:800 13px/1 var(--mono);letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border-radius:6px;color:#14070f}
-    .act-replace{background:#ff5d6c;box-shadow:0 0 22px -6px #ff5d6c}
-    .act-repair{background:#ffb347;box-shadow:0 0 22px -6px #ffb347}
-    .act-recalibrate{background:#c084fc;box-shadow:0 0 22px -6px #c084fc}
-    .act-inspect{background:#7dd3fc}
-    .act-none{background:transparent;color:var(--mint);border:1px solid var(--mint);padding:7px 11px;letter-spacing:.4px}
-    .urgency{font:700 11px var(--mono);letter-spacing:.8px;text-transform:uppercase;color:var(--ink)}
-    .sc-scenario{font-weight:700!important;text-transform:uppercase;letter-spacing:.4px}
-    .sc-action{margin-top:7px}
-    .sc-action .act{font-size:11px;padding:6px 9px}
-    .sc-action .urgency{color:var(--screen-ink,#e8eee9)}
-    @media(max-width:980px){.core-scene{grid-template-columns:1fr}.sensor-panel{border-left:0;border-top:1px solid #22332e;max-height:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}.sensor-panel>.eye{grid-column:1/-1}.scene-view{height:460px}}
-    @media(max-width:760px){.shell{padding:0 16px 40px}.masthead{margin:0 -16px 22px;padding:26px 16px 22px}.upload{grid-template-columns:1fr;padding:20px}.summary{grid-template-columns:repeat(2,1fr)}.charts{grid-template-columns:1fr}}
-    @media(max-width:600px){.scene-view{height:400px}.scene-hint{display:none}.sensor-tag span{display:none}}
-    @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+    /* ================================================================ top bar */
+    .topbar{position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+    .topbar .wrap{display:flex;align-items:center;gap:var(--s4);height:60px}
+    .brand{display:flex;align-items:center;gap:var(--s3);min-width:0;text-decoration:none;color:var(--text)}
+    .brand-mark{width:30px;height:30px;flex:none;color:var(--accent)}
+    .brand-text{display:flex;flex-direction:column;min-width:0}
+    .brand-name{font:700 var(--fs-lg)/1.15 var(--font);letter-spacing:-.2px;white-space:nowrap}
+    .brand-desc{color:var(--text-3);font-size:var(--fs-xs);white-space:nowrap}
+    .topbar-spacer{flex:1}
+    .topbar-actions{display:flex;align-items:center;gap:var(--s2)}
+    .source{display:flex;min-width:0;max-width:300px}
+    .source .badge{max-width:100%}
+    .source .badge span{overflow:hidden;text-overflow:ellipsis}
+
+    /* ================================================================ intro */
+    .intro{padding:var(--s8) 0 var(--s6)}
+    .intro h1{font:650 var(--fs-2xl)/1.2 var(--font);letter-spacing:-.4px;margin-top:6px}
+    .intro p{color:var(--text-2);margin-top:6px;max-width:760px}
+
+    /* ================================================================ metrics */
+    .metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s4)}
+    .metric{position:relative;display:flex;flex-direction:column;gap:6px;min-height:118px;padding:var(--s4) var(--panel-pad);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg)}
+    .metric-label{color:var(--text-2);font-size:var(--fs-sm);font-weight:500;padding-right:var(--s4)}
+    .metric-value{display:flex;align-items:baseline;gap:6px;font:600 28px/1.1 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+    .metric-value small{font:500 var(--fs-sm)/1 var(--font);color:var(--text-3);letter-spacing:0}
+    .metric-context{color:var(--text-3);font-size:var(--fs-xs);margin-top:auto}
+    .metric .dot{position:absolute;top:20px;right:18px;width:8px;height:8px;border-radius:50%}
+    .metric .dot.ok{background:var(--ok)}.metric .dot.warn{background:var(--warn)}.metric .dot.bad{background:var(--crit)}
+    .metric.is-empty .metric-value{color:var(--text-3)}
+
+    /* ================================================================ reactor + monitors */
+    .reactor{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:var(--s4);align-items:stretch}
+    .viewer{display:flex;flex-direction:column;min-width:0;overflow:hidden}
+    .scene-view{position:relative;flex:1;min-height:520px;background:radial-gradient(ellipse at 50% 42%,#15291f 0%,#0b1211 70%)}
+    .scene-view canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+    .scene-labels{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+    .scene-loading{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-2);font-size:var(--fs-sm)}
+    .scene-view.ready .scene-loading,.scene-view.no-webgl .scene-loading{display:none}
+    .scene-fallback{position:absolute;inset:0;display:grid;place-items:center;padding:var(--s6);text-align:center;color:var(--text-2)}
+    .viewer-foot{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);flex-wrap:wrap;padding:var(--s3) var(--panel-pad);border-top:1px solid var(--border);color:var(--text-3);font-size:var(--fs-xs)}
+    .legend-inline{display:flex;gap:var(--s4);flex-wrap:wrap}
+    .legend-inline span{display:inline-flex;align-items:center;gap:6px}
+    .legend-inline i{width:8px;height:8px;border-radius:50%}
+    /* 3D labels: compact (ID + status dot) until hovered or selected, so they never cover the model */
+    .sensor-tag{--tone:var(--idle);pointer-events:auto;cursor:pointer;display:flex;align-items:center;gap:6px;padding:4px 8px;margin-top:-26px;border:1px solid color-mix(in srgb,var(--tone) 55%,transparent);border-radius:999px;background:rgba(10,16,15,.86);color:var(--text);font:600 11px/1.2 var(--mono);white-space:nowrap;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);transition:background .15s}
+    .sensor-tag::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--tone);flex:none}
+    .sensor-tag b{font:inherit;color:var(--text)}
+    .sensor-tag span,.sensor-tag em{display:none;font:400 11px/1.3 var(--font);font-style:normal;color:var(--text-2)}
+    .sensor-tag:hover,.sensor-tag:focus-visible,.sensor-tag.selected{flex-direction:column;align-items:flex-start;gap:2px;border-radius:var(--r-sm);padding:6px 10px;background:rgba(16,24,22,.96);z-index:5}
+    .sensor-tag:hover::before,.sensor-tag:focus-visible::before,.sensor-tag.selected::before{display:none}
+    .sensor-tag:hover span,.sensor-tag:hover em,.sensor-tag:focus-visible span,.sensor-tag:focus-visible em,.sensor-tag.selected span,.sensor-tag.selected em{display:block}
+    .sensor-tag.selected{box-shadow:0 0 0 1px var(--tone)}
+
+    .monitors{display:flex;flex-direction:column;min-width:0}
+    .sensor-panel{display:flex;flex-direction:column;gap:var(--s2);padding:var(--s3)}
+    .sensor-panel>.eye{display:none}
+    .panel-empty{margin:0 0 var(--s1);padding:10px 12px;border-radius:var(--r-sm);background:var(--sunken);border:1px dashed var(--border-strong);color:var(--text-2);font-size:var(--fs-sm)}
+    .sensor-card{--tone:var(--idle);all:unset;box-sizing:border-box;display:flex;flex-direction:column;gap:3px;padding:10px 12px 10px 14px;border:1px solid var(--border);border-left:3px solid var(--tone);border-radius:var(--r);background:var(--elevated);cursor:pointer;transition:border-color .15s,background .15s}
+    .sensor-card:hover{background:#1b2724;border-color:var(--border-strong);border-left-color:var(--tone)}
+    .sensor-card.selected{border-color:var(--tone);background:#1b2724}
+    .sensor-card:focus-visible{box-shadow:var(--focus)}
+    .sc-top{display:flex;align-items:center;gap:var(--s2);min-width:0}
+    .sc-top b{flex:none;font:600 var(--fs-sm)/1.4 var(--mono);color:var(--text)}
+    .sc-top .sc-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;font-size:var(--fs-sm);color:var(--text)}
+    .sc-top i{flex:none;font:600 var(--fs-xs)/1 var(--font);font-style:normal;color:var(--tone);padding:5px 8px;border-radius:999px;border:1px solid color-mix(in srgb,var(--tone) 45%,transparent);background:color-mix(in srgb,var(--tone) 10%,transparent);white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+    .sc-meta{color:var(--text-3);font-size:var(--fs-xs);line-height:1.4}
+    .sc-read{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px var(--s3);min-height:24px;color:var(--text-3);font-size:var(--fs-xs)}
+    .sc-read>span:first-child{white-space:nowrap}
+    .sc-read b{color:var(--text);font:500 var(--fs-xs) var(--mono);font-variant-numeric:tabular-nums}
+    .sc-action{display:flex;align-items:center;gap:var(--s2);flex:none}
+
+    /* maintenance action pills */
+    .act{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:var(--r-sm);font:700 11px/1 var(--font);letter-spacing:.5px;text-transform:uppercase;border:1px solid}
+    .act-replace{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 50%,transparent);background:color-mix(in srgb,var(--crit) 14%,transparent)}
+    .act-repair{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 50%,transparent);background:color-mix(in srgb,var(--warn) 12%,transparent)}
+    .act-recalibrate{color:#b9a3ff;border-color:color-mix(in srgb,#b9a3ff 45%,transparent);background:color-mix(in srgb,#b9a3ff 12%,transparent)}
+    .act-inspect{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,transparent);background:color-mix(in srgb,var(--info) 10%,transparent)}
+    .act-none{color:var(--text-2);border-color:var(--border-strong);background:transparent;text-transform:none;letter-spacing:0;font-weight:600}
+    .urgency{color:var(--text-2);font:600 var(--fs-xs)/1 var(--font)}
+
+    /* ================================================================ upload */
+    .upload{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:var(--s6);padding:var(--panel-pad)}
+    .dropzone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s3);min-height:220px;padding:var(--s6);text-align:center;border:1.5px dashed var(--border-strong);border-radius:var(--r);background:var(--sunken);transition:border-color .15s,background .15s}
+    .dropzone.drag{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 6%,var(--sunken))}
+    .dropzone>svg{width:30px;height:30px;color:var(--text-3)}
+    .dropzone-title{font-weight:600}
+    .dropzone-sub{color:var(--text-3);font-size:var(--fs-xs);max-width:420px}
+    .dropzone-actions{display:flex;gap:var(--s2);flex-wrap:wrap;justify-content:center}
+    .formats{display:flex;gap:6px;justify-content:center}
+    .file-status{display:flex;align-items:center;gap:var(--s2);font-size:var(--fs-sm);color:var(--text-2);max-width:100%}
+    .file-status:empty{display:none}
+    .file-status b{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+    .spinner{width:14px;height:14px;border-radius:50%;border:2px solid var(--border-strong);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none}
+    .requirements h3{font-size:var(--fs-md);font-weight:600;margin-bottom:var(--s2)}
+    .requirements ul{margin:0;padding-left:18px;color:var(--text-2);font-size:var(--fs-sm);line-height:1.75}
+    .requirements li::marker{color:var(--text-3)}
+    .requirements code{white-space:normal}
+    .requirements .note{margin-top:var(--s3);color:var(--text-3);font-size:var(--fs-xs)}
+
+    /* ================================================================ notices */
+    .message{display:none;align-items:flex-start;gap:var(--s3);margin-top:var(--s4);padding:12px 14px;border-radius:var(--r);border:1px solid var(--border-strong);background:var(--elevated);color:var(--text);font-size:var(--fs-sm)}
+    .message.show{display:flex}
+    .message::before{content:"";width:8px;height:8px;margin-top:6px;border-radius:50%;background:var(--info);flex:none}
+    .message.success{border-color:color-mix(in srgb,var(--ok) 40%,transparent);background:color-mix(in srgb,var(--ok) 7%,var(--surface))}
+    .message.success::before{background:var(--ok)}
+    .message.error{border-color:color-mix(in srgb,var(--crit) 45%,transparent);background:color-mix(in srgb,var(--crit) 8%,var(--surface))}
+    .message.error::before{background:var(--crit)}
+
+    /* ================================================================ analysis */
+    .status{display:none;grid-template-columns:4px minmax(0,1fr);column-gap:var(--s4);padding:var(--s4) var(--panel-pad) var(--s4) 0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);margin-bottom:var(--s4);overflow:hidden}
+    .status.show{display:grid}
+    .status>*{grid-column:2}
+    .status .tone{grid-column:1;grid-row:1 / span 4;background:var(--idle);border-radius:0 4px 4px 0}
+    .status .eye{font:600 11px/1.4 var(--font);letter-spacing:.9px;text-transform:uppercase}
+    .status b{display:block;font:600 var(--fs-lg)/1.35 var(--font);margin:4px 0}
+    .status .sub{color:var(--text-2);font-size:var(--fs-sm)}
+    .status .disclaimer{color:var(--text-3);font-size:var(--fs-xs);margin-top:var(--s2)}
+    .finding-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:var(--s4)}
+    .finding-grid:empty{display:none}
+    .finding{display:flex;flex-direction:column;gap:var(--s3);min-width:0;padding:var(--s4);background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);border-top:3px solid var(--idle)}
+    .finding.ok{border-top-color:var(--ok)}.finding.warn{border-top-color:var(--warn)}.finding.bad{border-top-color:var(--crit)}
+    .finding h3{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);flex-wrap:wrap;font:600 var(--fs-md)/1.3 var(--mono)}
+    .finding .scenario{display:inline-flex;align-items:center;height:24px;padding:0 9px;border-radius:999px;border:1px solid;font:600 var(--fs-xs)/1 var(--font)}
+    .kv{display:flex;flex-direction:column;margin:0;padding:2px 12px;border-radius:var(--r);background:var(--sunken);border:1px solid var(--border)}
+    .kv div{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);padding:7px 0}
+    .kv div+div{border-top:1px solid var(--border)}
+    .kv dt{color:var(--text-3);font-size:var(--fs-sm)}
+    .kv dd{margin:0;font:600 var(--fs-md)/1.2 var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+    .kv dd small{color:var(--text-3);font-weight:500}
+    .finding-summary{color:var(--text-2);font-size:var(--fs-sm)}
+    .finding-action{display:flex;flex-direction:column;gap:var(--s2);padding-top:var(--s3);border-top:1px solid var(--border)}
+    .finding-action .row{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+    .finding-action p{color:var(--text-2);font-size:var(--fs-sm)}
+    .when{display:flex;flex-direction:column;gap:2px;color:var(--text-3);font-size:var(--fs-xs)}
+    .when b{color:var(--text);font-weight:600}
+    .healthbar{height:4px;border-radius:2px;background:var(--border);overflow:hidden}
+    .healthbar i{display:block;height:100%}
+    details.steps{font-size:var(--fs-sm)}
+    details.steps summary{cursor:pointer;color:var(--text-2);font-weight:500;list-style:none;display:inline-flex;align-items:center;gap:8px;border-radius:var(--r-sm)}
+    details.steps summary::-webkit-details-marker{display:none}
+    details.steps summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+    details.steps[open] summary::before{transform:rotate(45deg)}
+    details.steps summary:hover{color:var(--text)}
+    details.steps ul{margin:var(--s2) 0 0;padding-left:18px;color:var(--text-2);line-height:1.6}
+
+    /* ================================================================ charts */
+    .charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s4)}
+    .charts:empty{display:none}
+    .chart-card{display:flex;flex-direction:column;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg)}
+    .chart-card.expanded{grid-column:1 / -1}
+    .chart-card.bad{border-color:color-mix(in srgb,var(--crit) 40%,var(--border))}
+    .chart-card.warn{border-color:color-mix(in srgb,var(--warn) 35%,var(--border))}
+    .chart-head{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);border-bottom:1px solid var(--border);min-width:0;flex-wrap:wrap}
+    .chart-head h3{font:600 var(--fs-md)/1 var(--mono)}
+    .chart-head .latest{margin-left:auto;color:var(--text-3);font-size:var(--fs-xs);white-space:nowrap}
+    .chart-head .latest b{color:var(--text);font:600 var(--fs-sm) var(--mono);font-variant-numeric:tabular-nums}
+    .chart-body{position:relative;padding:var(--s2) var(--s3) 0;outline:none;touch-action:pan-y}
+    .chart-body svg{display:block;width:100%;height:auto;overflow:visible}
+    .chart-body:focus-visible{box-shadow:inset 0 0 0 2px var(--info);border-radius:var(--r)}
+    .chart-tip{position:absolute;top:8px;z-index:5;min-width:160px;padding:8px 10px;border-radius:var(--r-sm);background:#1d2926;border:1px solid var(--border-strong);box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:var(--fs-xs);pointer-events:none;opacity:0;transition:opacity .08s}
+    .chart-tip.show{opacity:1}
+    .chart-tip .t{color:var(--text-3);margin-bottom:4px;font-family:var(--mono)}
+    .chart-tip .r{display:flex;justify-content:space-between;align-items:center;gap:var(--s4);color:var(--text-2)}
+    .chart-tip .r b{color:var(--text);font:600 var(--fs-xs) var(--mono);font-variant-numeric:tabular-nums}
+    .chart-tip i{display:inline-block;width:10px;height:0;border-top:2px solid;margin-right:6px;vertical-align:middle}
+    .chart-legend{display:flex;gap:var(--s4);flex-wrap:wrap;padding:var(--s2) var(--s4) var(--s3);color:var(--text-3);font-size:var(--fs-xs)}
+    .chart-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+    .chart-legend i{display:inline-block;width:14px;height:0;border-top:2px solid}
+    .chart-legend i.dash{border-top-style:dashed}
+
+    /* ================================================================ methodology + footer */
+    .method{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s4)}
+    .method .panel{padding:var(--panel-pad)}
+    .method h3{font-size:var(--fs-md);font-weight:600;margin-bottom:var(--s2)}
+    .method p,.method li{color:var(--text-2);font-size:var(--fs-sm);line-height:1.65}
+    .method ul{margin:0;padding-left:18px}
+    .method code{white-space:normal}
+    .footer{margin-top:var(--s10);padding:var(--s6) 0 var(--s10);border-top:1px solid var(--border);color:var(--text-3);font-size:var(--fs-xs)}
+    .footer .wrap{display:flex;justify-content:space-between;gap:var(--s4);flex-wrap:wrap}
+
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes pulse{50%{opacity:.35}}
+
+    /* ================================================================ responsive */
+    @media (max-width:1180px){
+      .reactor{grid-template-columns:1fr}
+      .scene-view{min-height:440px}
+      .sensor-panel{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+      .panel-empty{grid-column:1 / -1}
+      .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .method{grid-template-columns:1fr 1fr}
+      .method .panel:last-child{grid-column:1 / -1}
+    }
+    @media (max-width:900px){
+      .charts{grid-template-columns:1fr}
+      .upload{grid-template-columns:1fr}
+      .brand-desc{display:none}
+      .source{max-width:200px}
+    }
+    @media (max-width:680px){
+      .wrap{padding:0 var(--s4)}
+      .topbar .wrap{height:56px;gap:var(--s2)}
+      .topbar-actions .btn-label,.topbar-actions .btn-ghost{display:none}
+      .topbar-actions .btn{padding:0 10px}
+      .source{max-width:150px}
+      .intro{padding:var(--s6) 0 var(--s4)}
+      .intro h1{font-size:22px}
+      .metrics{gap:var(--s3)}
+      .metric{min-height:104px;padding:var(--s3) var(--s4)}
+      .metric-value{font-size:24px}
+      .scene-view{min-height:340px}
+      .sensor-panel{display:flex}
+      .method{grid-template-columns:1fr}
+      .section{margin-top:var(--s8)}
+      .viewer-foot .hint{display:none}
+      .dropzone{padding:var(--s5) var(--s4)}
+      .chart-head .expand{order:2;margin-left:auto}
+      .chart-head .latest{order:3;margin-left:0;width:100%}
+    }
+    @media (max-width:420px){ .source{display:none} .metric-value{font-size:22px} }
+    @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}html{scroll-behavior:auto}}
   </style>
   <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
 </head>
 <body>
-  <main class="shell">
-    <header class="masthead">
-      <div class="eye">Radiation instrumentation · local data review</div>
-      <h1>NuclearRad AI</h1>
-      <div class="sub">Upload RAD sensor readings to chart the data, flag anomalies, and receive recommended next steps.</div>
-    </header>
-    <section class="core-scene" aria-label="3D model of the reactor containment and its five radiation monitors">
-      <div class="scene-view" id="scene3d">
-        <div class="scene-loading">Loading 3D model…</div>
-        <div class="scene-copy"><div class="eye">Live 3D model</div><h2>Reactor containment</h2><p>Pressurised-water reactor · five radiation monitors</p></div>
-        <div class="scene-hint">Drag to rotate · scroll to zoom · click a monitor to fly to it</div>
-        <div class="scene-legend"><i></i> nominal <i style="background:var(--amber)"></i> attention <i style="background:var(--red)"></i> issue</div>
-      </div>
-      <aside class="sensor-panel" id="sensorPanel" aria-label="Radiation monitors"></aside>
+  <!-- ============================================================ top bar -->
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="#top" aria-label="NuclearRad AI, back to top">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".45"/><path fill="currentColor" d="M16 13.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6ZM12.1 14.3 7.4 11.6a9.6 9.6 0 0 0-1.1 4.4h5.4c0-.6.1-1.2.4-1.7Zm7.8 0c.3.5.4 1.1.4 1.7h5.4c0-1.6-.4-3.1-1.1-4.4l-4.7 2.7Zm-2.3 4.9a3.5 3.5 0 0 1-3.2 0l-2.7 4.7a9.5 9.5 0 0 0 8.6 0l-2.7-4.7Z"/></svg>
+        <span class="brand-text"><span class="brand-name">NuclearRad AI</span><span class="brand-desc">Radiation Monitoring &amp; Sensor Analytics</span></span>
+      </a>
+      <span class="topbar-spacer"></span>
+      <div class="source" aria-live="polite"><span id="sourceStatus" class="badge" title="Current data source"><span>No dataset loaded</span></span></div>
+      <nav class="topbar-actions" aria-label="Data actions">
+        <a class="btn btn-ghost" href="#methodology">Methodology</a>
+        <button id="demoTop" class="btn btn-secondary btn-sm" type="button" title="Load the synthetic demonstration data set" aria-label="Load demo data">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4 2.5v11l9-5.5-9-5.5Z"/></svg><span class="btn-label">Demo data</span></button>
+        <label class="btn btn-primary btn-sm" for="file" title="Upload an .xlsx, .xls or .csv file" aria-label="Upload data">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M8 10.5V2.5M4.8 5.7 8 2.5l3.2 3.2M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2"/></svg><span class="btn-label">Upload</span></label>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top" class="wrap">
+    <!-- ============================================================ page title -->
+    <section class="intro">
+      <div class="eyebrow">Radiation instrumentation · local data review</div>
+      <h1>Sensor data review dashboard</h1>
+      <p>Upload RAD sensor readings to chart the data, flag anomalies, and receive recommended next steps.</p>
     </section>
 
-    <section class="upload">
-      <div><h2>Analyse an Excel data set</h2><p>Choose an <b>.xlsx</b>, <b>.xls</b>, or <b>.csv</b> file. Sensor columns named <code>RAD-01</code> … <code>RAD-05</code> or <code>Sensor_1</code> … <code>Sensor_5</code> (units such as <code>Sensor_1_MPa</code> are fine) are detected automatically. An optional <code>sample</code>, <code>time</code>, <code>Time_s</code>, or <code>timestamp</code> column is used for the x-axis; label columns such as <code>Anomaly_Active</code>, <code>Real_Leak</code> or <code>Faulty_Sensor</code> are ignored.</p></div>
-      <div class="actions"><label class="file" for="file">Upload data</label><input id="file" type="file" accept=".xlsx,.xls,.csv"><button id="demo" class="button" type="button">Load demo data</button></div>
+    <!-- ============================================================ overview metrics -->
+    <section aria-label="Overview metrics">
+      <div id="summary" class="metrics">
+        <div class="metric is-empty"><span class="metric-label">Samples analysed</span><span class="metric-value">—</span><span class="metric-context">Load a dataset to begin</span></div>
+        <div class="metric is-empty"><span class="metric-label">Monitored channels</span><span class="metric-value">—</span><span class="metric-context">RAD-01 to RAD-05</span></div>
+        <div class="metric is-empty"><span class="metric-label">Latest network median</span><span class="metric-value">—</span><span class="metric-context">Median of the latest readings</span></div>
+        <div class="metric is-empty"><span class="metric-label">Channels requiring review</span><span class="metric-value">—</span><span class="metric-context">No analysis yet</span></div>
+      </div>
     </section>
-    <div id="message" class="message"></div>
-    <section id="summary" class="summary"></section>
-    <section id="status" class="status"></section>
-    <h2 id="findingsTitle" class="section" hidden>Assessment and suggested actions</h2>
-    <section id="findings" class="finding-grid"></section>
-    <h2 id="chartsTitle" class="section" hidden>Individual sensor readings</h2>
-    <div id="charts" class="charts"></div>
-    <section class="format"><b style="color:var(--ink)">Data format</b><br>Put one reading per row. Example headers: <code>sample, RAD-01, RAD-02, RAD-03, RAD-04, RAD-05</code>. Values must be numeric; blank RAD cells are treated as missing readings. Analysis runs entirely in this browser and is a training aid, not a plant-control or safety system.</section>
+
+    <!-- ============================================================ reactor + monitors -->
+    <section class="section" aria-labelledby="reactorTitle">
+      <div class="section-head">
+        <div><h2 id="reactorTitle">Reactor containment</h2><p>Pressurised-water reactor · five radiation monitors · placement is illustrative</p></div>
+        <span class="eyebrow">Live 3D model</span>
+      </div>
+      <div class="reactor">
+        <div class="panel viewer">
+          <div class="scene-view" id="scene3d" role="img" aria-label="Interactive 3D model of the reactor containment and its five radiation monitors">
+            <div class="scene-loading">Loading 3D model…</div>
+          </div>
+          <div class="viewer-foot">
+            <span class="hint">Drag to rotate · scroll to zoom · click a monitor to fly to it</span>
+            <span class="legend-inline" aria-label="Monitor status legend"><span><i style="background:var(--ok)"></i>nominal</span><span><i style="background:var(--warn)"></i>attention</span><span><i style="background:var(--crit)"></i>issue</span><span><i style="background:var(--idle)"></i>awaiting data</span></span>
+          </div>
+        </div>
+        <aside class="panel monitors" aria-labelledby="monitorsTitle">
+          <div class="panel-head"><div><div id="monitorsTitle" class="panel-title">Radiation monitors</div><div class="panel-sub">Select a monitor to locate it in the model</div></div></div>
+          <div class="sensor-panel" id="sensorPanel"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============================================================ upload -->
+    <section class="section" aria-labelledby="uploadTitle">
+      <div class="section-head"><div><h2 id="uploadTitle">Analyse an Excel data set</h2><p>Files are read and analysed in this browser; nothing is uploaded to a server.</p></div></div>
+      <div class="panel upload">
+        <div id="dropzone" class="dropzone">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M12 15V4m-4.5 4.5L12 4l4.5 4.5M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>
+          <div class="dropzone-title">Drop a file here, or choose one</div>
+          <div class="formats" aria-label="Supported formats"><span class="chip">XLSX</span><span class="chip">XLS</span><span class="chip">CSV</span></div>
+          <div class="dropzone-actions">
+            <label class="btn btn-primary" for="file">Upload data</label><input id="file" type="file" accept=".xlsx,.xls,.csv">
+            <button id="demo" class="btn btn-secondary" type="button">Load demo data</button>
+          </div>
+          <div class="dropzone-sub">The demo is synthetic data: five channels, with RAD-03 drifting upward from sample 80.</div>
+          <div id="fileStatus" class="file-status" role="status" aria-live="polite"></div>
+        </div>
+        <div class="requirements">
+          <h3>Accepted columns</h3>
+          <ul>
+            <li>Choose an <b>.xlsx</b>, <b>.xls</b>, or <b>.csv</b> file. Sensor columns named <code>RAD-01</code> … <code>RAD-05</code> or <code>Sensor_1</code> … <code>Sensor_5</code> (units such as <code>Sensor_1_MPa</code> are fine) are detected automatically.</li>
+            <li>An optional <code>sample</code>, <code>time</code>, <code>Time_s</code>, or <code>timestamp</code> column is used for the x-axis.</li>
+            <li>Label columns such as <code>Anomaly_Active</code>, <code>Real_Leak</code> or <code>Faulty_Sensor</code> are ignored.</li>
+            <li>Values must be numeric; blank RAD cells are treated as missing readings. At least five rows are required.</li>
+          </ul>
+          <p class="note">Only the first sheet of a workbook is read.</p>
+        </div>
+      </div>
+      <div id="message" class="message" role="status" aria-live="polite"></div>
+    </section>
+
+    <!-- ============================================================ analysis -->
+    <section class="section" aria-labelledby="findingsTitle">
+      <div class="section-head"><div><h2 id="findingsTitle">Assessment and suggested actions</h2><p>Each channel is compared with its peers and with its own early readings.</p></div></div>
+      <section id="status" class="status" aria-live="polite"></section>
+      <div id="analysisEmpty" class="empty"><b>No dataset analysed yet</b><span>Load the synthetic demo data or upload a file to see channel assessments.</span></div>
+      <section id="findings" class="finding-grid"></section>
+    </section>
+
+    <!-- ============================================================ charts -->
+    <section class="section" aria-labelledby="chartsTitle">
+      <div class="section-head"><div><h2 id="chartsTitle">Individual sensor readings</h2><p>Hover a chart, or focus it and use the arrow keys, to read values. Expand a channel for more detail.</p></div></div>
+      <div id="chartsEmpty" class="empty"><b>No readings to chart</b><span>Charts appear here once a dataset has been analysed.</span></div>
+      <div id="charts" class="charts"></div>
+    </section>
+
+    <!-- ============================================================ methodology -->
+    <section id="methodology" class="section" aria-labelledby="methodTitle">
+      <div class="section-head"><div><h2 id="methodTitle">Data format and methodology</h2></div></div>
+      <div class="method">
+        <div class="panel"><h3>Data format</h3><p>Put one reading per row. Example headers: <code>sample, RAD-01, RAD-02, RAD-03, RAD-04, RAD-05</code>. Values must be numeric; blank RAD cells are treated as missing readings.</p></div>
+        <div class="panel"><h3>How channels are assessed</h3><ul>
+          <li>Each channel is compared with the median of the other channels at the same moment, so a change that moves every sensor together is treated as a plant-wide event rather than a sensor fault.</li>
+          <li>Logistic-regression models trained on labelled recordings flag drift, dropouts, noise, stuck readings, spikes and plant-wide leaks.</li>
+          <li>Health scores and repair or replacement timing extrapolate the recent trend against illustrative limits; they are estimates, not instrument specifications.</li>
+        </ul></div>
+        <div class="panel"><h3>Limitations</h3><p>Analysis runs entirely in this browser and is a training aid, not a plant-control or safety system. A flagged channel indicates a statistical disagreement with its peers, not a confirmed radiation hazard. Results are not validated for regulatory use.</p></div>
+      </div>
+    </section>
   </main>
+
+  <footer class="footer">
+    <div class="wrap"><span>NuclearRad AI · training aid for sensor-data review</span><span>Not a plant-control or safety system · data stays in your browser</span></div>
+  </footer>
+
   <script src="faultml.js"></script>
   <script src="detector.js"></script>
   <script src="app.js"></script>

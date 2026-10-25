@@ -26,10 +26,10 @@ const SENSORS = [
 ];
 
 const STATUS = {
-  waiting: { color: 0x7d9a92, css: "#9aa9a4", label: "Awaiting data", speed: 0.6 },
-  ok: { color: 0x5ff0a8, css: "#8ee2bd", label: "Healthy", speed: 1.0 },
-  warn: { color: 0xffb54a, css: "#f3b969", label: "Attention", speed: 2.2 },
-  bad: { color: 0xff4b40, css: "#ff746c", label: "Issue", speed: 4.0 },
+  waiting: { color: 0x7d9a92, css: "#7c8b94", label: "Awaiting data", speed: 0.6 },
+  ok: { color: 0x5ff0a8, css: "#3ccf91", label: "Healthy", speed: 1.0 },
+  warn: { color: 0xffb54a, css: "#f0b03c", label: "Attention", speed: 2.2 },
+  bad: { color: 0xff4b40, css: "#ef5d5d", label: "Issue", speed: 4.0 },
 };
 
 function severity(issue) {
@@ -540,16 +540,18 @@ function start() {
 }
 
 function renderPanel(panel, byId, onSelect, selected = null) {
-  panel.innerHTML = `<div class="eye">Radiation monitors</div>` + SENSORS.map((s) => {
+  const waiting = !byId || [...byId.values()].every((r) => !r || r.issue === "Awaiting data");
+  panel.innerHTML = `<div class="eye">Radiation monitors</div>`
+    + (waiting ? `<p class="panel-empty">No dataset loaded. Each monitor shows “Awaiting data” until the demo data or a file has been analysed.</p>` : "")
+    + SENSORS.map((s) => {
     const r = byId && byId.get(s.id), st = STATUS[severity(r && r.issue)];
     const reading = r && Number.isFinite(r.latest) ? r.latest.toFixed(2) : "—";
-    return `<button type="button" class="sensor-card${s.id === selected ? " selected" : ""}" data-id="${s.id}" style="--tone:${st.css}">
-      <span class="sc-top"><b>${s.id}</b><i class="sc-scenario">${r ? r.issue : st.label}</i></span>
-      <span class="sc-name">${s.name}</span>
-      <span class="sc-meta">${s.type}</span>
-      <span class="sc-meta">${s.where}</span>
-      <span class="sc-read"><span>Latest <b>${reading}</b></span><span>Typical <b>${s.typical} µSv/h</b></span></span>
-      ${r && r.maintenance && r.maintenance.action !== "None" ? `<span class="sc-action"><span class="act act-${r.maintenance.action.toLowerCase()}">${r.maintenance.action}</span><span class="urgency">${r.maintenance.urgency}</span></span>` : ""}
+    const action = r && r.maintenance && r.maintenance.action !== "None"
+      ? `<span class="sc-action"><span class="act act-${r.maintenance.action.toLowerCase()}">${r.maintenance.action}</span><span class="urgency">${r.maintenance.urgency}</span></span>` : "";
+    return `<button type="button" class="sensor-card${s.id === selected ? " selected" : ""}" data-id="${s.id}" style="--tone:${st.css}" title="${s.name} · ${s.where}" aria-label="${s.id} ${s.name}, ${r ? r.issue : st.label}. ${s.where}.">
+      <span class="sc-top"><b>${s.id}</b><span class="sc-name">${s.name}</span><i class="sc-scenario">${r ? r.issue : st.label}</i></span>
+      <span class="sc-meta">${s.type} · ${s.where}</span>
+      <span class="sc-read"><span>Latest <b>${reading}</b> · typical <b>${s.typical} µSv/h</b></span>${action}</span>
     </button>`;
   }).join("");
   panel.querySelectorAll(".sensor-card").forEach((c) => c.addEventListener("click", () => onSelect(c.dataset.id)));
