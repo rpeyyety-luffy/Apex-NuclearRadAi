@@ -529,7 +529,8 @@ function start() {
       m.beaconMat.emissive.setHex(s.color);
       m.screen.emissive.setHex(s.color);
       m.el.style.setProperty("--tone", s.css);
-      m.el.querySelector("em").textContent = r && Number.isFinite(r.latest) ? `${r.latest.toFixed(2)} · ${r.issue}` : r && r.issue !== "Awaiting data" ? r.issue : "Awaiting data";
+      const act = r && r.maintenance && r.maintenance.action !== "None" ? ` · ${r.maintenance.action.toUpperCase()}` : "";
+      m.el.querySelector("em").textContent = (r && Number.isFinite(r.latest) ? `${r.latest.toFixed(2)} · ${r.issue}` : r && r.issue !== "Awaiting data" ? r.issue : "Awaiting data") + act;
     }
     renderPanel(panel, byId, (id) => select(id), selected);
   }
@@ -543,11 +544,12 @@ function renderPanel(panel, byId, onSelect, selected = null) {
     const r = byId && byId.get(s.id), st = STATUS[severity(r && r.issue)];
     const reading = r && Number.isFinite(r.latest) ? r.latest.toFixed(2) : "—";
     return `<button type="button" class="sensor-card${s.id === selected ? " selected" : ""}" data-id="${s.id}" style="--tone:${st.css}">
-      <span class="sc-top"><b>${s.id}</b><i>${r ? r.issue : st.label}</i></span>
+      <span class="sc-top"><b>${s.id}</b><i class="sc-scenario">${r ? r.issue : st.label}</i></span>
       <span class="sc-name">${s.name}</span>
       <span class="sc-meta">${s.type}</span>
       <span class="sc-meta">${s.where}</span>
       <span class="sc-read"><span>Latest <b>${reading}</b></span><span>Typical <b>${s.typical} µSv/h</b></span></span>
+      ${r && r.maintenance && r.maintenance.action !== "None" ? `<span class="sc-action"><span class="act act-${r.maintenance.action.toLowerCase()}">${r.maintenance.action}</span><span class="urgency">${r.maintenance.urgency}</span></span>` : ""}
     </button>`;
   }).join("");
   panel.querySelectorAll(".sensor-card").forEach((c) => c.addEventListener("click", () => onSelect(c.dataset.id)));

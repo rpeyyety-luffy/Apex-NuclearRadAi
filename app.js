@@ -141,7 +141,7 @@ function maintenanceHtml(m, secondsPerReading) {
   const dates = m.action === 'Replace' || m.action === 'Inspect' ? '' : when(action, m.serviceIn) + when('Replace', m.replaceIn);
   return `<div class="health"><div class="health-top"><span>Health</span><b style="color:${tone}">${m.health}/100</b></div>`
     + `<div class="health-bar"><i style="width:${m.health}%;background:${tone}"></i></div>`
-    + `<p class="health-action"><b>${m.action === 'None' ? 'No maintenance due' : `${action} · ${m.urgency}`}</b></p>`
+    + `<p class="health-action"><span class="act act-${m.action.toLowerCase()}">${m.action === 'None' ? 'No maintenance due' : action}</span>${m.action === 'None' ? '' : `<span class="urgency">${m.urgency}</span>`}</p>`
     + (dates ? `<div class="health-when">${dates}</div>` : '')
     + (m.action === 'None' ? '' : `<p class="small" style="margin-top:6px">${m.text}</p>`) + '</div>';
 }
@@ -175,7 +175,7 @@ function render(report) {
     const type = result.status === 'Healthy' ? 'ok' : result.status === 'Faulty' ? 'bad' : 'warn';
     const meta = `Latest: ${Number.isFinite(result.latest) ? result.latest.toFixed(2) : 'missing'} · baseline: ${result.baseline.toFixed(2)}`;
     const advice = result.status === 'Healthy' ? '' : `<p style="margin-top:7px">${result.recommendation}</p>`;
-    return `<article class="finding ${type}"><h3>${result.sensor} · ${result.issue}</h3><p>${result.summary}</p>${maintenanceHtml(result.maintenance, report.secondsPerReading)}${advice}<p class="small" style="margin-top:9px">${meta}</p></article>`;
+    return `<article class="finding ${type}"><h3><span>${result.sensor}</span><span class="scenario ${type}">${result.issue}</span></h3><p>${result.summary}</p>${maintenanceHtml(result.maintenance, report.secondsPerReading)}${advice}<p class="small" style="margin-top:9px">${meta}</p></article>`;
   }).join('');
   $('findings').classList.add('show');
   $('chartsTitle').hidden = false;
