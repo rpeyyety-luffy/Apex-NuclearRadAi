@@ -123,7 +123,7 @@ function analyse(data) {
   });
   const active = results.filter((result) => result.issue !== 'Healthy');
   const network = results.filter((result) => Number.isFinite(result.latest)).map((result) => result.latest);
-  return { ...data, baselineCount, results, active, latestMedian: median(network), verdict: detection.verdict, leak: detection.leak };
+  return { ...data, baselineCount, results, active, latestMedian: median(network), verdict: detection.verdict, leak: detection.leak, detection };
 }
 
 // ------------------------------------------------------------------ small helpers
@@ -414,7 +414,7 @@ function render(report) {
 // ------------------------------------------------------------------ loading data
 let loaded = false;
 let loadId = 0;   // only the most recent load request may update the page
-function runAnalysis(getRows, sourceLabel, sourceBadge, id = ++loadId, onDone = null) {
+function runAnalysis(getRows, sourceLabel, sourceBadge, id = ++loadId, onDone = null, filters = {}) {
   setSource(`Analysing ${sourceLabel}…`, 'info', true);
   setFileStatus(`<span class="spinner" aria-hidden="true"></span><span>Analysing <b>${esc(sourceLabel)}</b>…</span>`);
   clearNotice();
@@ -426,8 +426,10 @@ function runAnalysis(getRows, sourceLabel, sourceBadge, id = ++loadId, onDone = 
       const report = analyse(normalizeRows(getRows()));
       if (id !== loadId) return;
       report.sourceLabel = sourceLabel;
+      report.filters = filters;
       render(report);
       loaded = true;
+      setCurrentReport(report);
       if (onDone) onDone();
       setSource(sourceBadge, 'ok');
       setFileStatus(`<span class="badge ok"><span>Analysed</span></span><b>${esc(sourceLabel)}</b>`);
@@ -487,7 +489,8 @@ function showDemoPicker(show, scenario) {
 }
 function loadDemo(scenario) {
   scenario = typeof scenario === 'string' && DEMO_SCENARIOS[scenario] ? scenario : ($('demoScenario')?.value || DEMO_DEFAULT);
-  runAnalysis(() => demoRows(scenario), `Synthetic demo data · ${scenario}`, `Demo data · ${scenario}`, ++loadId, () => showDemoPicker(true, scenario));
+  runAnalysis(() => demoRows(scenario), `Synthetic demo data · ${scenario}`, `Demo data · ${scenario}`, ++loadId, () => showDemoPicker(true, scenario),
+    { 'Demo scenario': scenario });
 }
 // kept for the Node checks and any caller that already has parsed rows
 function loadRows(rows, source) {
@@ -504,6 +507,8 @@ $('file').addEventListener('change', (event) => {
 $('demo').addEventListener('click', () => loadDemo());
 $('demoTop')?.addEventListener('click', () => loadDemo());
 $('demoScenario')?.addEventListener('change', (event) => loadDemo(event.target.value));
+$('reportExport')?.addEventListener('click', (event) => exportReport(event.currentTarget, 'pdf'));
+$('reportView')?.addEventListener('click', (event) => exportReport(event.currentTarget, 'view'));
 
 const zone = $('dropzone');
 if (zone) {
@@ -519,6 +524,77 @@ if (zone) {
   // a file dropped outside the drop area must not navigate away from the page
   window.addEventListener('dragover', (e) => e.preventDefault());
   window.addEventListener('drop', (e) => { if (!zone.contains(e.target)) e.preventDefault(); });
+}
+
+// ------------------------------------------------------------------ report export
+// Data collection (report_data.js), recommendation rules (report_rules.js) and rendering
+// (report_render.js) live in their own modules; this part only wires them to the page.
+let currentReport = null;
+function setCurrentReport(report) {
+  currentReport = report;
+  for (const id of ['reportExport', 'reportView']) {
+    const btn = $(id);
+    if (!btn) continue;
+    btn.disabled = false;
+    btn.title = id === 'reportExport' ? 'Open the print dialog for the report; choose “Save as PDF”' : 'Open the printable report in a new tab';
+  }
+}
+
+function reportDataset(report) {
+  return {
+    names: report.sensors, columns: report.results.map((r) => r.series), labels: report.rows.map((r) => r.label),
+    indexLabel: report.indexLabel, detection: report.detection, sourceLabel: report.sourceLabel, filters: report.filters || {},
+  };
+}
+
+function setBusy(btn, busy) {
+  if (!btn) return;
+  if (busy) { btn.dataset.label = btn.innerHTML; btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Preparing…'; btn.disabled = true; btn.setAttribute('aria-busy', 'true'); }
+  else { if (btn.dataset.label) btn.innerHTML = btn.dataset.label; btn.disabled = !currentReport; btn.removeAttribute('aria-busy'); }
+}
+
+function exportReport(btn, mode) {
+  if (!currentReport) { notice('Load the demo data or a file before exporting a report.', 'error'); return; }
+  if (!window.ReportData || !window.ReportRender) { notice('The report modules could not load. Reload the page and try again.', 'error'); return; }
+  // open the tab inside the click so pop-up blockers allow it; it is filled once the report is built
+  const tab = mode === 'view' ? window.open('', '_blank') : null;
+  if (mode === 'view' && !tab) { notice('The browser blocked the new tab. Allow pop-ups for this page, or use “Export report (PDF)”.', 'error'); return; }
+  setBusy(btn, true);
+  setTimeout(() => {
+    try {
+      const data = ReportData.buildReport(reportDataset(currentReport), { sensorsMeta: window.NuclearRadSensors || [], generatedAt: new Date() });
+      if (mode === 'view') {
+        const url = URL.createObjectURL(new Blob([ReportRender.renderReportHtml(data)], { type: 'text/html' }));
+        tab.location.href = url;
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        notice('The printable report opened in a new tab.', 'success');
+        setBusy(btn, false);
+        return;
+      }
+      let frame = $('reportFrame');
+      if (!frame) {
+        frame = document.createElement('iframe');
+        frame.id = 'reportFrame';
+        frame.title = 'Report for printing';
+        frame.setAttribute('aria-hidden', 'true');
+        frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+        document.body.appendChild(frame);
+      }
+      frame.onload = () => {
+        try {
+          frame.contentWindow.focus();
+          frame.contentWindow.print();   // the browser's dialog offers “Save as PDF”
+        } catch (error) {
+          notice(`The print dialog could not open: ${error.message}. Use “Print view” instead.`, 'error');
+        } finally { setBusy(btn, false); }
+      };
+      frame.srcdoc = ReportRender.renderReportHtml(data, { embedded: true });
+    } catch (error) {
+      if (tab) tab.close();
+      notice(`The report could not be created: ${error.message || error}`, 'error');
+      setBusy(btn, false);
+    }
+  }, 30);
 }
 
 renderCore();

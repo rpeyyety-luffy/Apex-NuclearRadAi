@@ -271,6 +271,10 @@
     @keyframes spin{to{transform:rotate(360deg)}}
     @keyframes pulse{50%{opacity:.35}}
 
+    .section-actions{display:flex;gap:var(--s2);flex-wrap:wrap}
+    .btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+    .btn .spinner{border-color:currentColor;border-top-color:transparent;opacity:.8}
+
     /* demo scenario picker (only shown while the demo data is loaded) */
     .demo-picker{display:flex;flex-direction:column;gap:6px;width:min(320px,100%);text-align:left}
     .demo-picker[hidden]{display:none}
@@ -447,7 +451,13 @@
 
     <!-- ============================================================ analysis -->
     <section class="section" aria-labelledby="findingsTitle">
-      <div class="section-head"><div><h2 id="findingsTitle">Assessment and suggested actions</h2><p>Each channel is compared with its peers and with its own early readings.</p></div></div>
+      <div class="section-head"><div><h2 id="findingsTitle">Assessment and suggested actions</h2><p>Each channel is compared with its peers and with its own early readings.</p></div>
+        <div class="section-actions">
+          <button id="reportView" class="btn btn-secondary btn-sm" type="button" disabled title="Load data to enable the report">Print view</button>
+          <button id="reportExport" class="btn btn-primary btn-sm" type="button" disabled title="Load data to enable the report">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M8 2.5v8M4.8 7.3 8 10.5l3.2-3.2M2.5 13.5h11"/></svg>Export report (PDF)</button>
+        </div>
+      </div>
       <section id="status" class="status" aria-live="polite"></section>
       <div id="analysisEmpty" class="empty"><b>No dataset analysed yet</b><span>Load the synthetic demo data or upload a file to see channel assessments.</span></div>
       <section id="findings" class="finding-grid"></section>
@@ -481,6 +491,10 @@
 
   <script src="faultml.js"></script>
   <script src="detector.js"></script>
+  <script src="sensors.js"></script>
+  <script src="report_rules.js"></script>
+  <script src="report_data.js"></script>
+  <script src="report_render.js"></script>
   <script src="app.js"></script>
   <script type="module" src="reactor3d.js"></script>
 </body>

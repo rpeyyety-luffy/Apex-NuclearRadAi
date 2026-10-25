@@ -11,19 +11,16 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
 // ------------------------------------------------------------------ the monitors
-// typical = normal dose rate from the ideal healthy run (µSv/h)
+// names, types and locations come from sensors.js (shared with the exported report);
+// only the placement in this scene is defined here
+const INFO = Object.fromEntries((window.NuclearRadSensors || []).map((s) => [s.id, s]));
 const SENSORS = [
-  { id: "RAD-01", name: "Reactor cavity area monitor", type: "Gamma area monitor · ionisation chamber",
-    where: "Operating deck, beside the reactor head", typical: 2.5, mount: "post", pos: [7.2, 12.3, 1.2] },
-  { id: "RAD-02", name: "Primary loop area monitor", type: "Gamma area monitor · Geiger-Müller tube",
-    where: "Steam generator compartment, next to a reactor coolant pump", typical: 8.0, mount: "post", pos: [5.2, 0, 7.4] },
-  { id: "RAD-03", name: "Personnel airlock monitor", type: "Gamma area monitor · plastic scintillator",
-    where: "Inside the personnel airlock entrance", typical: 0.8, mount: "wall", angle: -0.5 * Math.PI, height: 15.6 },
-  { id: "RAD-04", name: "Plant vent stack monitor", type: "Effluent monitor · NaI(Tl) scintillation detector",
-    where: "Vent stack sampling platform, outside containment", typical: 0.25, mount: "stack", pos: [24, 9, -24] },
-  { id: "RAD-05", name: "Containment high-range monitor", type: "High-range gamma monitor · ionisation chamber",
-    where: "Upper containment wall, below the dome", typical: 1.5, mount: "wall", angle: 0.78 * Math.PI, height: 24 },
-];
+  { id: "RAD-01", mount: "post", pos: [7.2, 12.3, 1.2] },
+  { id: "RAD-02", mount: "post", pos: [5.2, 0, 7.4] },
+  { id: "RAD-03", mount: "wall", angle: -0.5 * Math.PI, height: 15.6 },
+  { id: "RAD-04", mount: "stack", pos: [24, 9, -24] },
+  { id: "RAD-05", mount: "wall", angle: 0.78 * Math.PI, height: 24 },
+].map((s) => ({ name: s.id, type: "", where: "", typical: "—", ...INFO[s.id], ...s }));
 
 const STATUS = {
   waiting: { color: 0x7d9a92, css: "#7f8f9a", label: "Awaiting data", speed: 0.6 },

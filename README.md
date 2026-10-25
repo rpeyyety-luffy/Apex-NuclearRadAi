@@ -107,6 +107,53 @@ Vercel cannot host a Streamlit server, so `index.html` runs the app in the brows
 static site — import the repo in Vercel and deploy with no extra settings. The first load takes a
 few seconds while Python loads in the browser.
 
+## Export report (PDF)
+
+On the data monitor page (`index.html`), load the demo data or a file, then use the buttons above
+**Assessment and suggested actions**:
+
+- **Export report (PDF)** opens the browser's print dialog with the report; choose *Save as PDF*.
+- **Print view** opens the same report in a new tab, with its own *Print / Save as PDF* button.
+
+The report covers whatever is currently loaded (the uploaded file, or the demo with its selected
+scenario, which is listed under *Filters applied*). It contains a header (title, generation time,
+time range, data source), an executive summary with sensor counts by trust level, a sensor table
+(type, location, last reading, last seen, verification status, trust level and score, flags), three
+charts (sensors by trust level, abnormal readings by type, and reading trends for the flagged or
+lowest-scoring sensors) and prioritised recommended actions. Every page has a footer with the page
+number and generation time. Everything is built in the browser; no data is sent anywhere.
+
+| File | Role |
+|---|---|
+| `report_data.js` | Collects the report data from the analysis (no rendering, no rules) |
+| `report_rules.js` | Trust levels and the High / Medium / Low action rules |
+| `report_render.js` | Turns report data into a print-optimised HTML page with static SVG charts |
+| `sensors.js` | Sensor names, types and locations, shared with the 3D model |
+
+**Trust levels** (first match from the top): *Offline* when the last 5% of readings (at least 5) are
+missing; *Untrusted* when the detector reports the sensor as faulty; *Needs review* when it is on
+watch or at risk; otherwise *Trusted*. The score shown next to the level is the detector's health
+score (0–100).
+
+**Customising the recommendations**: edit `report_rules.js`. `SETTINGS` holds the limits (offline
+tail, the health score below which a healthy sensor gets a "monitor" note, the missing-data share
+that triggers a logging check). `ACTION_RULES` is an ordered list; each rule has an `id`, a
+`priority` (High, Medium or Low, possibly depending on the data), a `when` test that returns the
+evidence text or `null`, and a `next` step. Rules that share a `group` are exclusive per sensor
+(only the first match is used), so a sensor marked for replacement does not also get a
+recalibration action. The rules are deterministic and use no external service.
+
+Tests:
+
+```bash
+node ml/test_report.js        # trust levels, every action rule, aggregation on all labelled recordings, edge cases
+node ml/test_report_pdf.js    # renders real PDFs with headless Chrome and checks they are valid
+node ml/test_report_pdf.js --out sample_report.pdf   # also keeps a sample PDF
+```
+
+The PDF smoke test needs Chrome or Chromium (set `CHROME_PATH` if it is not found); without one it
+prints `SKIPPED` and exits with code 2.
+
 ## Sensor fault detector
 
 `fault_detector.html` lets anyone upload sensor readings (Excel or CSV, one column per sensor) and
