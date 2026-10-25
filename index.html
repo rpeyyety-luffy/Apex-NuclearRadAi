@@ -271,6 +271,17 @@
     @keyframes spin{to{transform:rotate(360deg)}}
     @keyframes pulse{50%{opacity:.35}}
 
+    /* demo scenario picker (only shown while the demo data is loaded) */
+    .demo-picker{display:flex;flex-direction:column;gap:6px;width:min(320px,100%);text-align:left}
+    .demo-picker[hidden]{display:none}
+    .demo-picker label{color:var(--text-2);font-size:var(--fs-sm);font-weight:600}
+    .select-wrap{position:relative}
+    .select-wrap::after{content:"";position:absolute;right:16px;top:50%;width:8px;height:8px;margin-top:-6px;border-right:2px solid var(--text-2);border-bottom:2px solid var(--text-2);transform:rotate(45deg);pointer-events:none}
+    .demo-picker select{appearance:none;-webkit-appearance:none;width:100%;height:44px;padding:0 44px 0 14px;border-radius:var(--r);border:1px solid var(--border-strong);background:var(--elevated);color:var(--text);font:600 var(--fs-base)/1 var(--font);cursor:pointer;transition:border-color .15s}
+    .demo-picker select:hover{border-color:color-mix(in srgb,var(--accent-2) 55%,var(--border-strong))}
+    .demo-picker select:focus-visible{outline:none;box-shadow:var(--focus)}
+    .demo-picker option{background:var(--surface);color:var(--text)}
+
     /* ================================================================ accent details */
     .metric{overflow:hidden}
     .metric::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--m-accent,var(--border-strong))}
@@ -408,7 +419,16 @@
             <label class="btn btn-primary" for="file">Upload data</label><input id="file" type="file" accept=".xlsx,.xls,.csv">
             <button id="demo" class="btn btn-secondary" type="button">Load demo data</button>
           </div>
-          <div class="dropzone-sub">The demo is synthetic data: five channels, with RAD-03 drifting upward from sample 80.</div>
+          <div id="demoPicker" class="demo-picker" hidden>
+            <label for="demoScenario">Scenario</label>
+            <div class="select-wrap">
+              <select id="demoScenario" aria-describedby="demoNote">
+                <option>Normal</option><option>Real leak</option><option>Spike</option><option selected>Drift</option>
+                <option>Stuck</option><option>Noise</option><option>Dropout</option><option>Real leak + Drift</option>
+              </select>
+            </div>
+          </div>
+          <div id="demoNote" class="dropzone-sub" data-default="The demo is synthetic data: five channels, with RAD-03 drifting upward from sample 80.">The demo is synthetic data: five channels, with RAD-03 drifting upward from sample 80.</div>
           <div id="fileStatus" class="file-status" role="status" aria-live="polite"></div>
         </div>
         <div class="requirements">

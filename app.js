@@ -26,13 +26,46 @@ function clearNotice() { $('message').className = 'message'; }
 function normal(random) {
   return Math.sqrt(-2 * Math.log(random() || 0.01)) * Math.cos(2 * Math.PI * random());
 }
-function demoRows() {
+// synthetic demo scenarios (mirrors nuclearrad.generate): RAD-03 is the faulty channel from sample 80
+const DEMO_SCENARIOS = {
+  'Normal': 'All five channels are healthy.',
+  'Real leak': 'Every channel rises together, by up to 90% over 30 samples from sample 80: a plant-wide event, not a sensor fault.',
+  'Spike': 'RAD-03 jumps to 2.5–5× its level for one or two samples at samples 80 and 120.',
+  'Drift': 'RAD-03 drifts upward by 0.7% per sample from sample 80.',
+  'Stuck': 'RAD-03 freezes at its sample-80 reading.',
+  'Noise': 'RAD-03 scatters eight times more than normal from sample 80.',
+  'Dropout': 'RAD-03 has no data at samples 80–94 and 130–139.',
+  'Real leak + Drift': 'Every channel rises together from sample 80, and RAD-03 also drifts upward by 0.7% per sample.',
+};
+const DEMO_DEFAULT = 'Drift';
+
+function demoRows(scenario = DEMO_DEFAULT) {
   let seed = 7;
   const random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  // a second generator for the fault itself, so every scenario shares the same healthy noise
+  let faultSeed = 11;
+  const faultRandom = () => ((faultSeed = (faultSeed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const start = 80, k = 'RAD-03';
+  const leak = scenario.startsWith('Real leak');
+  const spikes = {};
+  if (scenario === 'Spike') {
+    for (const s of [start, 120]) {
+      const n = 1 + Math.floor(faultRandom() * 2), factor = 2.5 + faultRandom() * 2.5;
+      for (let j = 0; j < n; j += 1) spikes[s + j] = factor;
+    }
+  }
+  let frozen = null;
   return Array.from({ length: 180 }, (_, sample) => {
+    const truth = 100 * (leak ? 1 + 0.9 * Math.min(1, Math.max(0, (sample - start) / 30)) : 1);
     const row = { sample };
-    for (let i = 1; i <= 5; i += 1) row[`RAD-0${i}`] = 100 * (1 + 0.012 * normal(random));
-    if (sample >= 80) row['RAD-03'] *= 1 + 0.007 * (sample - 80);
+    for (let i = 1; i <= 5; i += 1) row[`RAD-0${i}`] = truth * (1 + 0.012 * normal(random));
+    if (sample >= start) {
+      if (scenario === 'Drift' || scenario === 'Real leak + Drift') row[k] *= 1 + 0.007 * (sample - start);
+      else if (scenario === 'Stuck') row[k] = frozen ??= row[k];
+      else if (scenario === 'Noise') row[k] = truth * (1 + 0.012 * 8 * normal(faultRandom));
+      else if (scenario === 'Dropout' && ((sample >= 80 && sample < 95) || (sample >= 130 && sample < 140))) row[k] = '';
+    }
+    if (spikes[sample]) row[k] = truth * spikes[sample];
     return row;
   });
 }
@@ -381,7 +414,7 @@ function render(report) {
 // ------------------------------------------------------------------ loading data
 let loaded = false;
 let loadId = 0;   // only the most recent load request may update the page
-function runAnalysis(getRows, sourceLabel, sourceBadge, id = ++loadId) {
+function runAnalysis(getRows, sourceLabel, sourceBadge, id = ++loadId, onDone = null) {
   setSource(`Analysing ${sourceLabel}…`, 'info', true);
   setFileStatus(`<span class="spinner" aria-hidden="true"></span><span>Analysing <b>${esc(sourceLabel)}</b>…</span>`);
   clearNotice();
@@ -395,6 +428,7 @@ function runAnalysis(getRows, sourceLabel, sourceBadge, id = ++loadId) {
       report.sourceLabel = sourceLabel;
       render(report);
       loaded = true;
+      if (onDone) onDone();
       setSource(sourceBadge, 'ok');
       setFileStatus(`<span class="badge ok"><span>Analysed</span></span><b>${esc(sourceLabel)}</b>`);
       notice(`${sourceLabel} loaded. ${report.rows.length} usable samples and ${report.sensors.length} RAD channels were analysed locally.`, 'success');
@@ -432,7 +466,7 @@ function handleFile(file) {
       const book = XLSX.read(reader.result, { type: 'array' });
       const sheet = book.Sheets[book.SheetNames[0]];
       return XLSX.utils.sheet_to_json(sheet, { defval: '' });
-    }, file.name, file.name, id);
+    }, file.name, file.name, id, () => showDemoPicker(false));
   };
   reader.onerror = () => {
     if (id !== loadId) return;
@@ -442,7 +476,19 @@ function handleFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
-function loadDemo() { runAnalysis(demoRows, 'Synthetic demo data', 'Demo data · synthetic'); }
+// the scenario picker only exists for the demo data; an uploaded file hides it again
+function showDemoPicker(show, scenario) {
+  const picker = $('demoPicker');
+  if (!picker) return;
+  picker.hidden = !show;
+  if (scenario) $('demoScenario').value = scenario;
+  const note = $('demoNote');
+  if (note) note.textContent = show ? `Synthetic demo data · ${scenario}: ${DEMO_SCENARIOS[scenario]}` : note.dataset.default;
+}
+function loadDemo(scenario) {
+  scenario = typeof scenario === 'string' && DEMO_SCENARIOS[scenario] ? scenario : ($('demoScenario')?.value || DEMO_DEFAULT);
+  runAnalysis(() => demoRows(scenario), `Synthetic demo data · ${scenario}`, `Demo data · ${scenario}`, ++loadId, () => showDemoPicker(true, scenario));
+}
 // kept for the Node checks and any caller that already has parsed rows
 function loadRows(rows, source) {
   const report = analyse(normalizeRows(rows));
@@ -455,8 +501,9 @@ $('file').addEventListener('change', (event) => {
   handleFile(event.target.files[0]);
   event.target.value = '';   // choosing the same file again re-runs the analysis
 });
-$('demo').addEventListener('click', loadDemo);
-$('demoTop')?.addEventListener('click', loadDemo);
+$('demo').addEventListener('click', () => loadDemo());
+$('demoTop')?.addEventListener('click', () => loadDemo());
+$('demoScenario')?.addEventListener('change', (event) => loadDemo(event.target.value));
 
 const zone = $('dropzone');
 if (zone) {
