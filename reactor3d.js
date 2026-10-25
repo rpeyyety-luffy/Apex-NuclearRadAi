@@ -26,10 +26,10 @@ const SENSORS = [
 ];
 
 const STATUS = {
-  waiting: { color: 0x7d9a92, css: "#7c8b94", label: "Awaiting data", speed: 0.6 },
-  ok: { color: 0x5ff0a8, css: "#3ccf91", label: "Healthy", speed: 1.0 },
-  warn: { color: 0xffb54a, css: "#f0b03c", label: "Attention", speed: 2.2 },
-  bad: { color: 0xff4b40, css: "#ef5d5d", label: "Issue", speed: 4.0 },
+  waiting: { color: 0x7d9a92, css: "#7f8f9a", label: "Awaiting data", speed: 0.6 },
+  ok: { color: 0x5ff0a8, css: "#14e0a0", label: "Healthy", speed: 1.0 },
+  warn: { color: 0xffb54a, css: "#ffb21e", label: "Attention", speed: 2.2 },
+  bad: { color: 0xff4b40, css: "#ff4d6d", label: "Issue", speed: 4.0 },
 };
 
 function severity(issue) {

@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const expectedSensors = ['RAD-01', 'RAD-02', 'RAD-03', 'RAD-04', 'RAD-05'];
 // chart palette: a healthy channel's raw line is neutral, so only flagged channels stand out
-const colors = { raw: '#d5ddda', peer: '#4fc1e3', threshold: '#f0b03c', grid: '#1e2926', axis: '#7f8e98', warn: '#f0b03c', bad: '#ef5d5d' };
+const colors = { raw: '#e6eef2', peer: '#22d3ee', threshold: '#ffb21e', grid: '#1b2a2e', axis: '#8595a1', warn: '#ffb21e', bad: '#ff4d6d' };
 
 function median(values) {
   const a = values.filter(Number.isFinite).sort((x, y) => x - y);
@@ -162,7 +162,7 @@ function renderChart(result, labels, opts = {}) {
   const thrY = y(threshold);
   chartState.set(result.sensor, { result, labels, domain, width, height, index: chartState.get(result.sensor)?.index ?? null });
   return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(result.sensor)} readings chart: raw reading and peer estimate over ${labels.length} samples">`
-    + `<rect x="${pad.l}" y="${pad.t}" width="${plotW}" height="${plotH}" fill="#0e1513"/>${grid}`
+    + `<rect x="${pad.l}" y="${pad.t}" width="${plotW}" height="${plotH}" fill="#0b1416"/>${grid}`
     + `<line x1="${pad.l}" x2="${pad.l + plotW}" y1="${pad.t + plotH}" y2="${pad.t + plotH}" stroke="${colors.axis}" opacity=".5"/>`
     + `<line x1="${pad.l}" x2="${width - pad.r}" y1="${thrY.toFixed(1)}" y2="${thrY.toFixed(1)}" stroke="${colors.threshold}" stroke-opacity=".6" stroke-dasharray="6 5"/>`
     + `<text x="${width - pad.r - 4}" y="${(thrY - 6).toFixed(1)}" text-anchor="end" fill="${colors.threshold}" fill-opacity=".85" font-size="11">130% of baseline</text>`
@@ -358,6 +358,7 @@ function render(report) {
     + `<b>${esc(headline)}</b><span class="sub">${esc(text)}</span>`
     + `<span class="disclaimer">Recommendations are a training aid; escalate operational decisions through approved plant procedures.</span>`;
   $('status').style.borderLeftColor = '';
+  $('status').style.setProperty('--status-tone', color);
   $('status').classList.add('show');
   renderCore(report.results);
 
